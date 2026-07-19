@@ -5,10 +5,12 @@ APP_DIR="${APP_DIR:-/opt/1panel/apps/new-api/new-api}"
 UPDATER_DIR="${UPDATER_DIR:-/opt/new-api-safe-updater}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/1panel/backups/new-api-safe-update}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/QuantumNous/new-api.git}"
+UPSTREAM_REF="${UPSTREAM_REF:-refs/tags/v1.0.0-rc.21}"
 FORK_REPO="${FORK_REPO:-https://github.com/GaiNianK/new-api.git}"
 CUSTOM_REF="${CUSTOM_REF:-feat/happyhorse-second-billing}"
 CUSTOM_COMMIT="${CUSTOM_COMMIT:-6a15d9b}"
 IMAGE_REPO="${IMAGE_REPO:-gainiank/new-api}"
+GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 SMOKE_PORT="${SMOKE_PORT:-3001}"
 SWAP_FILE="${SWAP_FILE:-/swapfile-new-api-build}"
 SWAP_SIZE_GB="${SWAP_SIZE_GB:-4}"
@@ -81,13 +83,13 @@ deployment_check() {
   state="$(docker inspect -f '{{.State.Status}}' "$container_id")"
   health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container_id")"
   check_local_status || die "local /api/status check failed"
-  upstream_head="$(git ls-remote "$UPSTREAM_REPO" refs/heads/main | awk '{print $1}')"
+  upstream_head="$(git ls-remote "$UPSTREAM_REPO" "$UPSTREAM_REF" | awk '{print $1}')"
   [[ -n "$upstream_head" ]] || die "cannot query upstream main"
 
   log "container=$container_id"
   log "image=$image"
   log "state=$state health=$health"
-  log "upstream_main=${upstream_head:0:12}"
+  log "upstream_ref=$UPSTREAM_REF commit=${upstream_head:0:12}"
   log "disk_available=$(df -h "$APP_DIR" | awk 'NR==2 {print $4}')"
   log "check passed; no production changes were made"
 }
@@ -139,23 +141,29 @@ prepare_source() {
     git -C "$REPO_DIR" remote add fork "$FORK_REPO"
   fi
   log "fetching upstream and custom branch"
-  git -C "$REPO_DIR" fetch --prune origin main
+  UPSTREAM_COMMIT="$(git ls-remote "$UPSTREAM_REPO" "$UPSTREAM_REF" | awk '{print $1}')"
+  [[ -n "$UPSTREAM_COMMIT" ]] || die "cannot resolve upstream ref $UPSTREAM_REF"
+  git -C "$REPO_DIR" fetch --prune origin "$UPSTREAM_REF"
+  UPSTREAM_COMMIT="$(git -C "$REPO_DIR" rev-parse 'FETCH_HEAD^{commit}')"
   git -C "$REPO_DIR" fetch --prune fork "$CUSTOM_REF"
   git -C "$REPO_DIR" cat-file -e "$CUSTOM_COMMIT^{commit}" 2>/dev/null || die "custom commit $CUSTOM_COMMIT is unavailable"
 
   git -C "$REPO_DIR" worktree prune
   [[ ! -e "$WORKTREE_DIR" ]] || die "stale worktree exists: $WORKTREE_DIR"
-  git -C "$REPO_DIR" worktree add --detach "$WORKTREE_DIR" origin/main
+  git -C "$REPO_DIR" worktree add --detach "$WORKTREE_DIR" "$UPSTREAM_COMMIT"
   git -C "$WORKTREE_DIR" -c user.name='New API Safe Updater' -c user.email='updater@localhost' cherry-pick "$CUSTOM_COMMIT" || {
     git -C "$WORKTREE_DIR" cherry-pick --abort >/dev/null 2>&1 || true
     die "custom patch conflicts with the latest upstream; production was not changed"
   }
+  if grep -q '^RUN go mod download$' "$WORKTREE_DIR/Dockerfile" && ! grep -q '^ENV GOPROXY=' "$WORKTREE_DIR/Dockerfile"; then
+    sed -i "/^RUN go mod download$/i ENV GOPROXY=${GOPROXY}" "$WORKTREE_DIR/Dockerfile"
+  fi
 }
 
 build_image() {
   local upstream_short version image
-  upstream_short="$(git -C "$WORKTREE_DIR" rev-parse --short=10 origin/main)"
-  version="happyhorse-${upstream_short}-${CUSTOM_COMMIT:0:7}"
+  upstream_short="${UPSTREAM_COMMIT:0:10}"
+  version="happyhorse-rc21-${upstream_short}-${CUSTOM_COMMIT:0:7}"
   image="$IMAGE_REPO:$version"
   printf '%s\n' "$version" > "$WORKTREE_DIR/VERSION"
   log "building $image; production remains online"

@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -164,11 +165,31 @@ func GetTokenUsage(c *gin.Context) {
 	})
 }
 
+func validateTokenGroupForUser(c *gin.Context, group string) bool {
+	userCache, err := model.GetUserCache(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	effectiveGroup := group
+	if effectiveGroup == "" {
+		effectiveGroup = userCache.Group
+	}
+	if !service.GroupInUserUsableGroupsWithSetting(userCache.Group, effectiveGroup, userCache.GetSetting()) {
+		common.ApiErrorI18n(c, i18n.MsgDistributorGroupAccessDenied)
+		return false
+	}
+	return true
+}
+
 func AddToken(c *gin.Context) {
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if !validateTokenGroupForUser(c, token.Group) {
 		return
 	}
 	if len(token.Name) > 50 {
@@ -274,6 +295,9 @@ func UpdateToken(c *gin.Context) {
 	cleanToken, err := model.GetTokenByIds(token.Id, userId)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if statusOnly == "" && !validateTokenGroupForUser(c, token.Group) {
 		return
 	}
 	if token.Status == common.TokenStatusEnabled {
