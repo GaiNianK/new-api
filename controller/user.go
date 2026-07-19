@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -364,6 +365,7 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	user.AllowedModelGroups = user.GetSetting().AllowedModelGroups
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -615,7 +617,8 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	userSetting := user.GetSetting()
+	groups := service.GetUserUsableGroupsWithSetting(user.Group, userSetting)
 	group := c.Query("group")
 	if group != "" {
 		if _, ok := groups[group]; !ok {
@@ -675,6 +678,15 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if updatedUser.AllowedModelGroups != nil {
+		updatedUser.AllowedModelGroups = service.NormalizeAllowedModelGroups(updatedUser.AllowedModelGroups)
+		for _, group := range updatedUser.AllowedModelGroups {
+			if !ratio_setting.ContainsGroupRatio(group) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
+		}
+	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -689,10 +701,20 @@ func UpdateUser(c *gin.Context) {
 		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
+	allowedModelGroups := updatedUser.AllowedModelGroups
+	allowedModelGroupsUpdated := allowedModelGroups != nil
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
+		}
+		if allowedModelGroupsUpdated {
+			userSetting := originUser.GetSetting()
+			userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(allowedModelGroups)
+			updatedUser.SetSetting(userSetting)
+			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).Update("setting", updatedUser.Setting).Error; err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
@@ -964,6 +986,15 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
+	if user.AllowedModelGroups != nil {
+		user.AllowedModelGroups = service.NormalizeAllowedModelGroups(user.AllowedModelGroups)
+		for _, group := range user.AllowedModelGroups {
+			if !ratio_setting.ContainsGroupRatio(group) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
+		}
+	}
 	if user.DisplayName == "" {
 		user.DisplayName = user.Username
 	}
@@ -983,6 +1014,14 @@ func CreateUser(c *gin.Context) {
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
+		}
+		if user.AllowedModelGroups != nil {
+			userSetting := cleanUser.GetSetting()
+			userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(user.AllowedModelGroups)
+			cleanUser.SetSetting(userSetting)
+			if err := tx.Model(&model.User{}).Where("id = ?", cleanUser.Id).Update("setting", cleanUser.Setting).Error; err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
@@ -1438,6 +1477,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		AllowedModelGroups:               existingSettings.AllowedModelGroups,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

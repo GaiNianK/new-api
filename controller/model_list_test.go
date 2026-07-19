@@ -215,6 +215,38 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	require.Empty(t, decodeUserModelsResponse(t, vipRecorder))
 }
 
+func TestGetUserModelsHonorsPerUserModelGroupAllowlist(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	user := model.User{
+		Id:       1003,
+		Username: "restricted-model-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}
+	user.SetSetting(dto.UserSetting{AllowedModelGroups: []string{"vip"}})
+	require.NoError(t, db.Create(&user).Error)
+	model.InvalidateUserCache(user.Id)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-restricted-default-model", ChannelId: 1, Enabled: true},
+		{Group: "vip", Model: "zz-restricted-vip-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	defaultRecorder := httptest.NewRecorder()
+	defaultContext, _ := gin.CreateTestContext(defaultRecorder)
+	defaultContext.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=default", nil)
+	defaultContext.Set("id", user.Id)
+	GetUserModels(defaultContext)
+	require.Empty(t, decodeUserModelsResponse(t, defaultRecorder))
+
+	vipRecorder := httptest.NewRecorder()
+	vipContext, _ := gin.CreateTestContext(vipRecorder)
+	vipContext.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=vip", nil)
+	vipContext.Set("id", user.Id)
+	GetUserModels(vipContext)
+	require.ElementsMatch(t, []string{"zz-restricted-vip-model"}, decodeUserModelsResponse(t, vipRecorder))
+}
+
 func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	withSelfUseModeDisabled(t)
 	withTieredBillingConfig(t, map[string]string{

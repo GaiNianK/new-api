@@ -187,10 +187,18 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	}
 
 	if tokenGroup == "auto" {
+		userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
+		if !ok {
+			var err error
+			userSetting, err = model.GetUserSetting(c.GetInt("id"), false)
+			if err != nil {
+				return modelListGroups{}, err
+			}
+		}
 		return modelListGroups{
 			userGroup:   userGroup,
 			tokenGroup:  tokenGroup,
-			ownerGroups: service.GetUserAutoGroup(userGroup),
+			ownerGroups: service.GetUserAutoGroupWithSetting(userGroup, userSetting),
 		}, nil
 	}
 

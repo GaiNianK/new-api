@@ -30,7 +30,9 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
-	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+	setting := user.GetSetting()
+	common.SetContextKey(c, constant.ContextKeyUserSetting, setting)
+	common.SetContextKey(c, constant.ContextKeyUserAllowedModelGroups, setting.AllowedModelGroups)
 }
 
 func (user *UserBase) GetSetting() dto.UserSetting {

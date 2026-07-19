@@ -31,6 +31,7 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -384,6 +385,31 @@ export function UsersMutateDrawer({
                             </SelectGroup>
                           </SelectContent>
                         </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='allowed_model_groups'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Allowed Model Groups')}</FormLabel>
+                        <MultiSelect
+                          options={groups.map((group) => ({
+                            value: group,
+                            label: group,
+                          }))}
+                          selected={field.value ?? []}
+                          onChange={field.onChange}
+                          placeholder={t('Select allowed model groups')}
+                        />
+                        <FormDescription>
+                          {t(
+                            'Leave empty to inherit all groups available to this user. Existing tokens and auto routing are restricted when groups are selected.'
+                          )}
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}

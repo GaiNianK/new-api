@@ -2,6 +2,8 @@ package dto
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -35,15 +37,26 @@ func (i *IntValue) UnmarshalJSON(b []byte) error {
 		*i = IntValue(n)
 		return nil
 	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err == nil {
+		if math.IsNaN(f) || math.IsInf(f, 0) || f > float64(math.MaxInt) || f < float64(math.MinInt) {
+			return fmt.Errorf("invalid integer value: %v", f)
+		}
+		*i = IntValue(int(math.Trunc(f)))
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
-	v, err := strconv.Atoi(s)
+	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return err
 	}
-	*i = IntValue(v)
+	if math.IsNaN(v) || math.IsInf(v, 0) || v > float64(math.MaxInt) || v < float64(math.MinInt) {
+		return fmt.Errorf("invalid integer value: %v", v)
+	}
+	*i = IntValue(int(math.Trunc(v)))
 	return nil
 }
 

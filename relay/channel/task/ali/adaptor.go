@@ -200,7 +200,15 @@ func sizeToResolution(size string) (string, error) {
 
 func ProcessAliOtherRatios(aliReq *AliVideoRequest) (map[string]float64, error) {
 	otherRatios := make(map[string]float64)
+	happyHorseRatio := map[string]float64{
+		"720P":  1,
+		"1080P": 1.2 / 0.9,
+	}
 	aliRatios := map[string]map[string]float64{
+		"happyhorse-1.1-t2v":        happyHorseRatio,
+		"happyhorse-1.1-i2v":        happyHorseRatio,
+		"happyhorse-1.1-r2v":        happyHorseRatio,
+		"happyhorse-1.0-video-edit": happyHorseRatio,
 		"wan2.6-i2v": {
 			"720P":  1,
 			"1080P": 1 / 0.6,
@@ -264,6 +272,14 @@ func isWan27I2VModel(model string) bool {
 	return strings.HasPrefix(model, "wan2.7-i2v")
 }
 
+func isHappyHorseModel(model string) bool {
+	return strings.HasPrefix(model, "happyhorse-")
+}
+
+func isHappyHorseVideoEditModel(model string) bool {
+	return isHappyHorseModel(model) && strings.Contains(model, "video-edit")
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
@@ -302,6 +318,69 @@ func secondTaskImage(req relaycommon.TaskSubmitReq) string {
 		}
 	}
 	return ""
+}
+
+func nonEmptyTaskImages(req relaycommon.TaskSubmitReq) []string {
+	images := make([]string, 0, len(req.Images)+1)
+	if image := strings.TrimSpace(req.Image); image != "" {
+		images = append(images, image)
+	}
+	for _, image := range req.Images {
+		if trimmed := strings.TrimSpace(image); trimmed != "" {
+			images = append(images, trimmed)
+		}
+	}
+	return images
+}
+
+func normalizeHappyHorseInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
+	if !isHappyHorseModel(aliReq.Model) {
+		return nil
+	}
+
+	if len(aliReq.Input.Media) == 0 {
+		switch {
+		case strings.Contains(aliReq.Model, "i2v"):
+			image := firstTaskImage(req)
+			if image != "" {
+				aliReq.Input.Media = []AliVideoMedia{{Type: "first_frame", URL: image}}
+			}
+		case strings.Contains(aliReq.Model, "r2v"):
+			for _, image := range nonEmptyTaskImages(req) {
+				aliReq.Input.Media = append(aliReq.Input.Media, AliVideoMedia{Type: "reference_image", URL: image})
+			}
+		case isHappyHorseVideoEditModel(aliReq.Model):
+			if video := strings.TrimSpace(req.InputReference); video != "" {
+				aliReq.Input.Media = append(aliReq.Input.Media, AliVideoMedia{Type: "video", URL: video})
+			}
+			for _, image := range nonEmptyTaskImages(req) {
+				aliReq.Input.Media = append(aliReq.Input.Media, AliVideoMedia{Type: "reference_image", URL: image})
+			}
+		}
+	}
+
+	switch {
+	case strings.Contains(aliReq.Model, "i2v"), strings.Contains(aliReq.Model, "r2v"):
+		if len(aliReq.Input.Media) == 0 {
+			return fmt.Errorf("%s requires at least one image", aliReq.Model)
+		}
+	case isHappyHorseVideoEditModel(aliReq.Model):
+		hasVideo := false
+		for _, media := range aliReq.Input.Media {
+			if media.Type == "video" && strings.TrimSpace(media.URL) != "" {
+				hasVideo = true
+				break
+			}
+		}
+		if !hasVideo {
+			return fmt.Errorf("%s requires a video input", aliReq.Model)
+		}
+	}
+
+	aliReq.Input.ImgURL = ""
+	aliReq.Input.FirstFrameURL = ""
+	aliReq.Input.LastFrameURL = ""
+	return nil
 }
 
 func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
@@ -367,7 +446,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	// 处理分辨率映射
 	if req.Size != "" {
 		// text to video size must be contained *
-		if strings.Contains(req.Model, "t2v") && !strings.Contains(req.Size, "*") {
+		if strings.Contains(aliReq.Model, "t2v") && !isHappyHorseModel(aliReq.Model) && !strings.Contains(req.Size, "*") {
 			return nil, fmt.Errorf("invalid size: %s, example: %s", req.Size, "1920*1080")
 		}
 		if strings.Contains(req.Size, "*") {
@@ -380,6 +459,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 			}
 			aliReq.Parameters.Resolution = resolution
 		}
+	} else if isHappyHorseModel(aliReq.Model) {
+		aliReq.Parameters.Resolution = "1080P"
 	} else {
 		// 根据模型设置默认分辨率
 		if strings.Contains(req.Model, "t2v") { // image to video
@@ -434,6 +515,12 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 
 	if aliReq.Model != upstreamModel {
 		return nil, errors.New("can't change model with metadata")
+	}
+	if isHappyHorseModel(aliReq.Model) && (aliReq.Parameters.Duration < 3 || aliReq.Parameters.Duration > 15) {
+		return nil, fmt.Errorf("happyhorse duration must be between 3 and 15 seconds")
+	}
+	if err := normalizeHappyHorseInput(aliReq, req); err != nil {
+		return nil, err
 	}
 
 	if err := normalizeWan27I2VInput(aliReq, req); err != nil {

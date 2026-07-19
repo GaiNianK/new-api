@@ -44,7 +44,8 @@ const (
 
 	/* user related keys */
 	ContextKeyUserId      ContextKey = "id"
-	ContextKeyUserSetting ContextKey = "user_setting"
+	ContextKeyUserSetting             ContextKey = "user_setting"
+	ContextKeyUserAllowedModelGroups ContextKey = "user_allowed_model_groups"
 	ContextKeyUserQuota   ContextKey = "user_quota"
 	ContextKeyUserStatus  ContextKey = "user_status"
 	ContextKeyUserEmail   ContextKey = "user_email"
