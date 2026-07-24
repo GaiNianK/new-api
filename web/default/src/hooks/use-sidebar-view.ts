@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
 import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import { hasChannelReadAccess } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -37,32 +38,43 @@ const ROOT_VIEW_KEY = '__root'
  * - Returns the matching nested {@link SidebarView} (with its nav
  *   groups) when the URL belongs to a registered drill-in workspace.
  * - Otherwise returns the root navigation, narrowed by:
- *     · admin-only group visibility (role-based);
- *     · `useSidebarConfig` (admin × user `sidebar_modules` overlay).
+ *     路 admin-only group visibility (role-based);
+ *     路 `useSidebarConfig` (admin 脳 user `sidebar_modules` overlay).
  *
  * Nested views are intentionally NOT passed through `useSidebarConfig`
- * — those filters target known dashboard URLs only, and gating is
+ * 鈥?those filters target known dashboard URLs only, and gating is
  * already enforced at the route level (`beforeLoad` redirects).
  */
 export function useSidebarView(): ResolvedSidebarView {
   const { t } = useTranslation()
   const pathname = useLocation({ select: (l) => l.pathname })
-  const userRole = useAuthStore((s) => s.auth.user?.role)
+  const user = useAuthStore((s) => s.auth.user)
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
-    const role = userRole ?? ROLE.GUEST
+    const role = user?.role ?? ROLE.GUEST
     const isAdmin = role >= ROLE.ADMIN
+    const canReadChannels = hasChannelReadAccess(user)
     return configFilteredRoot
-      .filter((group) => (group.id === 'admin' ? isAdmin : true))
+      .filter((group) => {
+        if (group.id !== 'admin') return true
+        return isAdmin || canReadChannels
+      })
       .map((group) => {
-        const items = group.items.filter(
-          (item) => item.requiredRole === undefined || role >= item.requiredRole
-        )
+        const items = group.items.filter((item) => {
+          if ('url' in item && item.url === '/channels') {
+            return canReadChannels
+          }
+          if (!isAdmin && group.id === 'admin') {
+            return false
+          }
+          return item.requiredRole === undefined || role >= item.requiredRole
+        })
         return items.length === group.items.length ? group : { ...group, items }
       })
-  }, [configFilteredRoot, userRole])
+      .filter((group) => group.items.length > 0)
+  }, [configFilteredRoot, user])
 
   const view = resolveSidebarView(pathname)
 

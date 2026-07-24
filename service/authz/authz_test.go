@@ -137,6 +137,23 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 	assert.Empty(t, ExplicitUserOverrides(42))
 }
 
+func TestSetUserPermissionsForRoleStoresCommonUserGrants(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+
+	require.NoError(t, SetUserPermissionsForRole(42, common.RoleCommonUser, PermissionsMap{ResourceChannel: {
+		ActionRead:           true,
+		ActionOperate:        false,
+		ActionWrite:          false,
+		ActionSensitiveWrite: false,
+		ActionSecretView:     false,
+	}}))
+
+	assert.True(t, Can(42, common.RoleCommonUser, ChannelRead))
+	assert.False(t, Can(42, common.RoleCommonUser, ChannelOperate))
+	assert.Equal(t, PermissionsMap{ResourceChannel: {ActionRead: true}}, ExplicitUserOverrides(42))
+}
+
 func TestClearUserAuthorizationRemovesOverrides(t *testing.T) {
 	db := newAuthzTestDB(t)
 	require.NoError(t, Init(db))

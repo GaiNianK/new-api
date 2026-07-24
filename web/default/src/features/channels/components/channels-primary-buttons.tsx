@@ -89,6 +89,11 @@ export function ChannelsPrimaryButtons() {
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
+  const canOperate = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.OPERATE
+  )
 
   const handleTagModeToggle = (checked: boolean) => {
     localStorage.setItem('enable-tag-mode', String(checked))
@@ -101,7 +106,7 @@ export function ChannelsPrimaryButtons() {
   }
 
   const handleBatchModeToggle = (checked: boolean) => {
-    setBatchMode(checked)
+    setBatchMode(canOperate && checked)
   }
 
   return (
@@ -120,6 +125,7 @@ export function ChannelsPrimaryButtons() {
             id='channel-batch-mode'
             checked={batchMode}
             onCheckedChange={handleBatchModeToggle}
+            disabled={!canOperate}
           />
         </div>
 
@@ -182,6 +188,7 @@ export function ChannelsPrimaryButtons() {
               className='sm:hidden'
               checked={batchMode}
               onCheckedChange={handleBatchModeToggle}
+              disabled={!canOperate}
             >
               <ListChecks className='mr-2 h-4 w-4' />
               {t('Batch Operations')}
@@ -211,6 +218,7 @@ export function ChannelsPrimaryButtons() {
               onClick={() => {
                 handleTestAllChannels(queryClient)
               }}
+              disabled={!canOperate}
             >
               {t('Test All Channels')}
               <DropdownMenuShortcut>
@@ -222,6 +230,7 @@ export function ChannelsPrimaryButtons() {
               onClick={() => {
                 handleUpdateAllBalances(queryClient)
               }}
+              disabled={!canOperate}
             >
               {t('Update All Balances')}
               <DropdownMenuShortcut>
@@ -233,7 +242,7 @@ export function ChannelsPrimaryButtons() {
 
             <DropdownMenuItem
               onClick={() => upstream.detectAllUpdates()}
-              disabled={upstream.detectAllLoading}
+              disabled={!canOperate || upstream.detectAllLoading}
             >
               {t('Detect All Upstream Updates')}
               <DropdownMenuShortcut>
@@ -243,7 +252,7 @@ export function ChannelsPrimaryButtons() {
 
             <DropdownMenuItem
               onClick={() => upstream.applyAllUpdates()}
-              disabled={upstream.applyAllLoading}
+              disabled={!canEditSensitive || upstream.applyAllLoading}
             >
               {t('Apply All Upstream Updates')}
               <DropdownMenuShortcut>
@@ -256,8 +265,10 @@ export function ChannelsPrimaryButtons() {
             <DropdownMenuItem
               onSelect={(e) => {
                 e.preventDefault()
+                if (!canOperate) return
                 setShowConsistencyDialog(true)
               }}
+              disabled={!canOperate}
             >
               {t('Repair Channel Consistency')}
               <DropdownMenuShortcut>

@@ -158,6 +158,31 @@ func TestChannelStatusValidation(t *testing.T) {
 	assert.False(t, isManageableChannelStatus(0))
 }
 
+func TestReadOnlyChannelScopeAndAPIAddressSanitization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("role", common.RoleCommonUser)
+	ctx.Set("id", 11)
+	ctx.Set("user_group", "default")
+
+	visibleURL := "https://visible.example.com"
+	hiddenURL := "https://hidden.example.com"
+	visible := &model.Channel{Group: "default,vip", BaseURL: &visibleURL}
+	hidden := &model.Channel{Group: "default", BaseURL: &hiddenURL, HideAPIAddress: true}
+	restricted := &model.Channel{Group: "private", BaseURL: &visibleURL}
+
+	assert.True(t, channelIntersectsGroups(visible, map[string]string{"default": ""}))
+	assert.False(t, channelIntersectsGroups(restricted, map[string]string{"default": ""}))
+
+	sanitizeChannelForReader(ctx, visible)
+	require.NotNil(t, visible.BaseURL)
+	assert.Equal(t, visibleURL, *visible.BaseURL)
+
+	sanitizeChannelForReader(ctx, hidden)
+	require.NotNil(t, hidden.BaseURL)
+	assert.Equal(t, hiddenAPIAddressPlaceholder, *hidden.BaseURL)
+}
+
 // TestChannelFieldsAreClassified guards the fail-closed sensitivity check: every
 // JSON field of PatchChannel (including the embedded model.Channel) must be listed
 // in channelSensitiveFields, channelNonSensitiveFields, or

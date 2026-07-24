@@ -64,6 +64,16 @@ export function hasPermission(
   return user.permissions?.admin_permissions?.[resource]?.[action] === true
 }
 
+export function hasChannelReadAccess(
+  user: AuthUser | null | undefined
+): boolean {
+  return hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+}
+
 // roleGrants returns the baseline grant matrix for the given role key.
 export function roleGrants(
   catalog: PermissionCatalog,

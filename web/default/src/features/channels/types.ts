@@ -47,6 +47,7 @@ export const channelSchema = z.object({
   test_time: z.number(),
   response_time: z.number(), // in milliseconds
   base_url: z.string().nullish(),
+  hide_api_address: z.boolean().default(false),
   other: z.string().default(''),
   balance: z.number().default(0), // in USD
   balance_updated_time: z.number(),
@@ -341,6 +342,7 @@ export interface ChannelFormData {
   name: string
   type: number
   base_url: string
+  hide_api_address?: boolean
   key: string
   openai_organization?: string
   models: string

@@ -33,6 +33,7 @@ type Channel struct {
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
 	BaseURL            *string `json:"base_url" gorm:"column:base_url;default:''"`
+	HideAPIAddress     bool    `json:"hide_api_address" gorm:"column:hide_api_address"`
 	Other              string  `json:"other"`
 	Balance            float64 `json:"balance"` // in USD
 	BalanceUpdatedTime int64   `json:"balance_updated_time" gorm:"bigint"`
@@ -76,12 +77,13 @@ type ChannelSortOptions struct {
 }
 
 var channelSortColumns = map[string]string{
-	"id":            "id",
-	"name":          "name",
-	"priority":      "priority",
-	"balance":       "balance",
-	"response_time": "response_time",
-	"test_time":     "test_time",
+	"id":               "id",
+	"name":             "name",
+	"priority":         "priority",
+	"balance":          "balance",
+	"response_time":    "response_time",
+	"test_time":        "test_time",
+	"hide_api_address": "hide_api_address",
 }
 
 func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) ChannelSortOptions {
@@ -159,6 +161,29 @@ func ApplyChannelGroupFilter(query *gorm.DB, group string) *gorm.DB {
 		return query
 	}
 	return query.Where(channelGroupFilterCondition(), channelGroupFilterPattern(group))
+}
+
+func ApplyChannelGroupsAnyFilter(query *gorm.DB, groups map[string]string) *gorm.DB {
+	if len(groups) == 0 {
+		return query.Where("1 = 0")
+	}
+	filtered := make([]string, 0, len(groups))
+	for group := range groups {
+		group = NormalizeChannelGroupFilter(group)
+		if group != "" {
+			filtered = append(filtered, group)
+		}
+	}
+	if len(filtered) == 0 {
+		return query.Where("1 = 0")
+	}
+	conditions := make([]string, 0, len(filtered))
+	args := make([]any, 0, len(filtered))
+	for _, group := range filtered {
+		conditions = append(conditions, channelGroupFilterCondition())
+		args = append(args, channelGroupFilterPattern(group))
+	}
+	return query.Where("("+strings.Join(conditions, " OR ")+")", args...)
 }
 
 // Value implements driver.Valuer interface

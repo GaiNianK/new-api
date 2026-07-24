@@ -124,6 +124,7 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"weight":              {},
 	"models":              {},
 	"group":               {},
+	"hide_api_address":    {},
 	"model_mapping":       {},
 	"status_code_mapping": {},
 	"priority":            {},

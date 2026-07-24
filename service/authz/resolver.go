@@ -6,15 +6,6 @@ import "github.com/casbin/casbin/v2"
 // short-circuits to allow. Otherwise a per-user override wins, then the union of
 // the subject's role baselines applies.
 func Can(userID int, systemRole int, permission Permission) bool {
-	roles := resolveSubjectRoles(userID, systemRole)
-	if len(roles) == 0 {
-		return false
-	}
-	for _, role := range roles {
-		if isSuperuserRole(role) {
-			return true
-		}
-	}
 	if !isKnownPermission(permission) {
 		return false
 	}
@@ -26,7 +17,12 @@ func Can(userID int, systemRole int, permission Permission) bool {
 	if effect, ok := explicitSubjectEffect(e, UserSubject(userID), permission); ok {
 		return effect == EffectAllow
 	}
+
+	roles := resolveSubjectRoles(userID, systemRole)
 	for _, role := range roles {
+		if isSuperuserRole(role) {
+			return true
+		}
 		if roleBaselineAllows(e, role, permission) {
 			return true
 		}
@@ -51,6 +47,9 @@ func Capabilities(userID int, systemRole int) PermissionsMap {
 }
 
 func roleBaselineAllows(e *casbin.SyncedEnforcer, roleKey string, permission Permission) bool {
+	if roleKey == "" {
+		return false
+	}
 	effect, ok := explicitSubjectEffect(e, RoleSubject(roleKey), permission)
 	return ok && effect == EffectAllow
 }

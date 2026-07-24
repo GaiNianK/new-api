@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,13 +17,37 @@ func TestGetUserUsableGroupsWithSettingPreservesLegacyBehaviorWhenUnset(t *testi
 	assert.Equal(t, legacy, withEmptySetting)
 }
 
-func TestGetUserUsableGroupsWithSettingFiltersModelGroups(t *testing.T) {
-	groups := GetUserUsableGroupsWithSetting("default", dto.UserSetting{
-		AllowedModelGroups: []string{" vip ", "vip", ""},
-	})
+func TestGetUserUsableGroupsWithSettingUsesSelectableAndAssignedUnion(t *testing.T) {
+	originalGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	defer func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	}()
 
-	_, allowed := groups["vip"]
-	_, denied := groups["default"]
-	require.True(t, allowed)
-	require.False(t, denied)
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"public":"Public"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"public":1,"hidden":2}`))
+
+	groups := GetUserUsableGroupsWithSetting("default", dto.UserSetting{
+		AllowedModelGroups: []string{" hidden ", "missing"},
+	})
+	assert.Contains(t, groups, "public")
+	assert.Contains(t, groups, "hidden")
+	assert.NotContains(t, groups, "missing")
+}
+
+func TestGetUserUsableGroupsWithSettingEmptyAllowlistPreservesLegacyGroups(t *testing.T) {
+	originalGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	defer func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	}()
+
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"public":"Public"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"public":1,"legacy":2}`))
+
+	legacy := GetUserUsableGroupsWithSetting("legacy", dto.UserSetting{})
+	assert.Contains(t, legacy, "legacy")
+	assert.Contains(t, legacy, "public")
 }

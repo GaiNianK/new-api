@@ -153,9 +153,8 @@ export function UsersMutateDrawer({
   const tokensOnly = currencyMeta.kind === 'tokens'
 
   const currentQuotaRaw = form.watch('quota_dollars') || 0
-  const selectedRole = form.watch('role')
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
-  const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
+  const selectedAllowedGroups = form.watch('allowed_model_groups') ?? []
 
   const onSubmit = async (data: UserFormValues) => {
     if (!isUpdate) {
@@ -415,6 +414,51 @@ export function UsersMutateDrawer({
                     )}
                   />
 
+                  {selectedAllowedGroups.length > 0 && (
+                    <FormField
+                      control={form.control}
+                      name='group_ratio_overrides'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Per-user group ratios')}</FormLabel>
+                          <div className='space-y-2'>
+                            {selectedAllowedGroups.map((group) => (
+                              <div
+                                key={group}
+                                className='grid grid-cols-[1fr_120px] items-center gap-2'
+                              >
+                                <Label className='truncate text-sm'>
+                                  {group}
+                                </Label>
+                                <Input
+                                  type='number'
+                                  min='0'
+                                  step='0.000001'
+                                  value={field.value?.[group] ?? ''}
+                                  placeholder={t('Default')}
+                                  onChange={(event) => {
+                                    const next = { ...(field.value ?? {}) }
+                                    const value = event.target.value
+                                    if (value === '') {
+                                      delete next[group]
+                                    } else {
+                                      next[group] = Number(value)
+                                    }
+                                    field.onChange(next)
+                                  }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <FormDescription>
+                            {t('Leave empty to use the global group ratio.')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
                   <FormField
                     control={form.control}
                     name='quota_dollars'
@@ -477,7 +521,6 @@ export function UsersMutateDrawer({
               )}
 
               {canEditAdminPermissions &&
-                targetIsAdmin &&
                 permissionCatalog.resources.length > 0 && (
                   <SideDrawerSection>
                     <h3 className='text-sm font-medium'>

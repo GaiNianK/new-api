@@ -59,7 +59,7 @@ interface ModelOption {
 interface GroupOption {
   label: string
   value: string
-  ratio?: number
+  ratio?: number | string
   desc?: string
   description?: string
 }
@@ -78,6 +78,16 @@ interface GroupSelectorProps {
   onGroupChange: (value: string) => void
   className?: string
   disabled?: boolean
+}
+
+function hasGroupRatio(group: GroupOption): boolean {
+  return group.ratio !== undefined && group.ratio !== null && group.ratio !== ''
+}
+
+function formatGroupRatio(group: GroupOption): string {
+  return typeof group.ratio === 'number'
+    ? `${group.ratio}x`
+    : String(group.ratio)
 }
 
 const ModelTriggerButton = React.forwardRef<
@@ -661,6 +671,11 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
       <span className='bg-muted text-muted-foreground hidden max-w-20 shrink-0 rounded px-1.5 py-0.5 text-[10px] sm:inline-flex'>
         {currentGroup?.label || t('Group')}
       </span>
+      {currentGroup && hasGroupRatio(currentGroup) && (
+        <span className='bg-info/10 text-info hidden shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums sm:inline-flex'>
+          {formatGroupRatio(currentGroup)}
+        </span>
+      )}
       <ChevronsUpDown className='text-muted-foreground ml-auto size-3.5 shrink-0 opacity-60' />
     </Button>
   )
@@ -702,6 +717,11 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
               <span className='min-w-0 truncate font-medium'>
                 {group.label}
               </span>
+              {hasGroupRatio(group) && (
+                <span className='bg-info/10 text-info shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] leading-none tabular-nums'>
+                  {formatGroupRatio(group)}
+                </span>
+              )}
               <Check
                 className={cn(
                   'size-3.5 shrink-0',

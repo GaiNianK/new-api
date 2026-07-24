@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -182,6 +183,7 @@ func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
 }
 
 func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T) {
+
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()
 	savedModelRatios := ratio_setting.ModelRatio2JSONString()
@@ -271,4 +273,29 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, "QuotaFromFloat", clamp.Op)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
+}
+
+func TestHandleGroupRatioUsesPerUserOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":2}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		UserGroup:  "default",
+		UsingGroup: "vip",
+		UserSetting: dto.UserSetting{
+			GroupRatioOverrides: map[string]float64{"vip": 0.75},
+		},
+	}
+
+	groupRatio := HandleGroupRatio(ctx, info)
+
+	require.Equal(t, 0.75, groupRatio.GroupRatio)
+	require.True(t, groupRatio.HasUserGroupOverride)
+	require.Equal(t, 0.75, groupRatio.UserGroupOverrideRatio)
+	require.False(t, groupRatio.HasSpecialRatio)
 }

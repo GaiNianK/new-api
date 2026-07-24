@@ -34,33 +34,33 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	return filtered
 }
 
+func buildUserGroupRatios(userGroup string, userSetting dto.UserSetting) map[string]float64 {
+	ratioMap := make(map[string]float64, len(ratio_setting.GetGroupRatioCopy()))
+	for groupName := range ratio_setting.GetGroupRatioCopy() {
+		ratioMap[groupName] = service.GetUserGroupRatioWithSetting(userGroup, groupName, userSetting)
+	}
+	return ratioMap
+}
+
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
 	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
-	groupRatio := map[string]float64{}
 	userSetting := dto.UserSetting{}
-	for s, f := range ratio_setting.GetGroupRatioCopy() {
-		groupRatio[s] = f
-	}
+	groupRatio := buildUserGroupRatios("", userSetting)
 	var group string
+
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
 			userSetting = user.GetSetting()
-			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
-				}
-			}
+			groupRatio = buildUserGroupRatios(group, userSetting)
 		}
 	}
 
 	usableGroup = service.GetUserUsableGroupsWithSetting(group, userSetting)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
-	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)

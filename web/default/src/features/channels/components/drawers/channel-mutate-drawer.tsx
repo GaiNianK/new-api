@@ -611,6 +611,11 @@ export function ChannelMutateDrawer({
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
+  const canEditChannel = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.WRITE
+  )
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
   const [channelKey, setChannelKey] = useState<string | null>(null)
@@ -650,6 +655,7 @@ export function ChannelMutateDrawer({
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
   const sensitiveLocked = isEditing && !canEditSensitive
+  const readOnlyChannel = isEditing && !canEditChannel && !canEditSensitive
 
   // Fetch channel details if editing
   const { data: channelData, isLoading: isChannelLoading } = useQuery({
@@ -2097,12 +2103,45 @@ export function ChannelMutateDrawer({
                           </Alert>
                         )}
 
+                        {readOnlyChannel && (
+                          <Alert>
+                            <AlertDescription>
+                              {t('Read-only channel access')}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+
                         <div className='border-border/60 bg-muted/10 rounded-lg border p-4'>
                           <fieldset
-                            disabled={sensitiveLocked}
+                            disabled={sensitiveLocked || readOnlyChannel}
                             className='space-y-4 disabled:opacity-60'
                           >
                             {/* Azure (type 3) */}
+                            <FormField
+                              control={form.control}
+                              name='hide_api_address'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between gap-4 rounded-md border p-3'>
+                                  <div className='space-y-1'>
+                                    <FormLabel>
+                                      {t('Hide API address')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Hide this channel API address from read-only managers.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value === true}
+                                      onCheckedChange={field.onChange}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
                             {currentType === 3 && (
                               <>
                                 <FormField
@@ -4633,14 +4672,16 @@ export function ChannelMutateDrawer({
             <SheetClose
               render={<Button variant='outline' disabled={isSubmitting} />}
             >
-              {t('Cancel')}
+              {readOnlyChannel ? t('Close') : t('Cancel')}
             </SheetClose>
-            <Button form='channel-form' type='submit' disabled={isSubmitting}>
-              {isSubmitting && (
-                <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-              )}
-              {isEditing ? t('Update Channel') : t('Save changes')}
-            </Button>
+            {!readOnlyChannel && (
+              <Button form='channel-form' type='submit' disabled={isSubmitting}>
+                {isSubmitting && (
+                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                )}
+                {isEditing ? t('Update Channel') : t('Save changes')}
+              </Button>
+            )}
           </SheetFooter>
         </SheetContent>
       </Sheet>

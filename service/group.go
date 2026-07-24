@@ -12,65 +12,77 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 	return GetUserUsableGroupsWithSetting(userGroup, dto.UserSetting{})
 }
 
-// GetUserUsableGroupsWithSetting applies the optional per-user model-group
-// allowlist after the normal user-group rules have been evaluated.
+// GetUserUsableGroupsWithSetting returns groups available to a user. An empty
+// allowlist preserves the legacy user-group behavior. A non-empty allowlist
+// combines globally selectable groups with administrator-assigned groups.
 func GetUserUsableGroupsWithSetting(userGroup string, userSetting dto.UserSetting) map[string]string {
-	groupsCopy := setting.GetUserUsableGroupsCopy()
+	globalGroups := setting.GetUserUsableGroupsCopy()
+	groupsCopy := make(map[string]string, len(globalGroups))
+	for group, desc := range globalGroups {
+		groupsCopy[group] = desc
+	}
+	validGroups := ratio_setting.GetGroupRatioCopy()
 	if userGroup != "" {
-		specialSettings, b := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
-		if b {
-			// 处理特殊可用分组
+		if specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup); ok {
 			for specialGroup, desc := range specialSettings {
-				if strings.HasPrefix(specialGroup, "-:") {
-					// 移除分组
-					groupToRemove := strings.TrimPrefix(specialGroup, "-:")
-					delete(groupsCopy, groupToRemove)
-				} else if strings.HasPrefix(specialGroup, "+:") {
-					// 添加分组
-					groupToAdd := strings.TrimPrefix(specialGroup, "+:")
-					groupsCopy[groupToAdd] = desc
-				} else {
-					// 直接添加分组
+				switch {
+				case strings.HasPrefix(specialGroup, "-:"):
+					delete(groupsCopy, strings.TrimPrefix(specialGroup, "-:"))
+				case strings.HasPrefix(specialGroup, "+:"):
+					groupsCopy[strings.TrimPrefix(specialGroup, "+:")] = desc
+				default:
 					groupsCopy[specialGroup] = desc
 				}
 			}
 		}
-		// 如果userGroup不在UserUsableGroups中，返回UserUsableGroups + userGroup
 		if _, ok := groupsCopy[userGroup]; !ok {
 			groupsCopy[userGroup] = "用户分组"
 		}
 	}
+
 	allowed := NormalizeAllowedModelGroups(userSetting.AllowedModelGroups)
 	if len(allowed) == 0 {
-		return groupsCopy
+		return filterValidUserGroups(groupsCopy, validGroups)
 	}
 
-	allowedSet := make(map[string]struct{}, len(allowed))
+	result := make(map[string]string, len(globalGroups)+len(allowed))
+	for group, desc := range globalGroups {
+		if _, ok := validGroups[group]; ok {
+			result[group] = desc
+		}
+	}
 	for _, group := range allowed {
-		allowedSet[group] = struct{}{}
-	}
-	autoAllowed := false
-	for _, autoGroup := range setting.GetAutoGroups() {
-		if _, ok := groupsCopy[autoGroup]; !ok {
-			continue
-		}
-		if _, ok := allowedSet[autoGroup]; ok {
-			autoAllowed = true
-			break
+		if _, ok := validGroups[group]; ok {
+			result[group] = setting.GetUsableGroupDescription(group)
 		}
 	}
-	for group := range groupsCopy {
+	if _, ok := groupsCopy["auto"]; ok && autoGroupAllowed(result) {
+		result["auto"] = groupsCopy["auto"]
+	}
+	return result
+}
+
+func filterValidUserGroups(groups map[string]string, validGroups map[string]float64) map[string]string {
+	result := make(map[string]string, len(groups))
+	for group, desc := range groups {
 		if group == "auto" {
-			if !autoAllowed {
-				delete(groupsCopy, group)
-			}
+			result[group] = desc
 			continue
 		}
-		if _, ok := allowedSet[group]; !ok {
-			delete(groupsCopy, group)
+		if _, ok := validGroups[group]; ok {
+			result[group] = desc
 		}
 	}
-	return groupsCopy
+	return result
+}
+
+func autoGroupAllowed(groups map[string]string) bool {
+	for _, autoGroup := range setting.GetAutoGroups() {
+		if _, ok := groups[autoGroup]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
@@ -83,7 +95,6 @@ func GroupInUserUsableGroupsWithSetting(userGroup, groupName string, userSetting
 	return ok
 }
 
-// GetUserAutoGroup 根据用户分组获取自动分组设置
 func GetUserAutoGroup(userGroup string) []string {
 	return GetUserAutoGroupWithSetting(userGroup, dto.UserSetting{})
 }
@@ -119,13 +130,17 @@ func NormalizeAllowedModelGroups(groups []string) []string {
 	return result
 }
 
-// GetUserGroupRatio 获取用户使用某个分组的倍率
-// userGroup 用户分组
-// group 需要获取倍率的分组
 func GetUserGroupRatio(userGroup, group string) float64 {
 	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
 	if ok {
 		return ratio
 	}
 	return ratio_setting.GetGroupRatio(group)
+}
+
+func GetUserGroupRatioWithSetting(userGroup, group string, userSetting dto.UserSetting) float64 {
+	if overrideRatio, ok := UserGroupRatioOverride(userSetting, group); ok {
+		return overrideRatio
+	}
+	return GetUserGroupRatio(userGroup, group)
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -365,11 +366,23 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
-	user.AllowedModelGroups = user.GetSetting().AllowedModelGroups
+	userSetting := user.GetSetting()
+	user.AllowedModelGroups = userSetting.AllowedModelGroups
+	responseBytes, err := common.Marshal(user)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	response := map[string]any{}
+	if err := common.Unmarshal(responseBytes, &response); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	response["group_ratio_overrides"] = userSetting.GroupRatioOverrides
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user,
+		"data":    response,
 	})
 	return
 }
@@ -656,8 +669,18 @@ func GetUserModels(c *gin.Context) {
 
 func UpdateUser(c *gin.Context) {
 	var updatedUser model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
-	if err != nil || updatedUser.Id == 0 {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var rawPayload map[string]json.RawMessage
+	if err := common.Unmarshal(bodyBytes, &rawPayload); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	_, settingFieldPresent := rawPayload["setting"]
+	if err := common.Unmarshal(bodyBytes, &updatedUser); err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -687,6 +710,10 @@ func UpdateUser(c *gin.Context) {
 			}
 		}
 	}
+	if updatedUser.GetSetting().GroupRatioOverrides != nil && !service.ValidateGroupRatioOverrides(updatedUser.GetSetting().GroupRatioOverrides) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -703,20 +730,21 @@ func UpdateUser(c *gin.Context) {
 	updatePassword := updatedUser.Password != ""
 	allowedModelGroups := updatedUser.AllowedModelGroups
 	allowedModelGroupsUpdated := allowedModelGroups != nil
+	updatedSetting := updatedUser.GetSetting()
+	groupRatioOverridesUpdated := settingFieldPresent
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
 		}
-		if allowedModelGroupsUpdated {
-			userSetting := originUser.GetSetting()
-			userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(allowedModelGroups)
+		if allowedModelGroupsUpdated || groupRatioOverridesUpdated {
+			userSetting := mergeManagedUserSettings(originUser.GetSetting(), allowedModelGroups, allowedModelGroupsUpdated, updatedSetting, groupRatioOverridesUpdated)
 			updatedUser.SetSetting(userSetting)
 			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).Update("setting", updatedUser.Setting).Error; err != nil {
 				return err
 			}
 		}
-		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
+		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, updatedUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
 		return err
 	}); err != nil {
@@ -741,6 +769,17 @@ func UpdateUser(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func mergeManagedUserSettings(origin dto.UserSetting, allowedModelGroups []string, allowedModelGroupsUpdated bool, updated dto.UserSetting, groupRatioOverridesUpdated bool) dto.UserSetting {
+	userSetting := origin
+	if allowedModelGroupsUpdated {
+		userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(allowedModelGroups)
+	}
+	if groupRatioOverridesUpdated {
+		userSetting.GroupRatioOverrides = service.NormalizeGroupRatioOverrides(updated.GroupRatioOverrides)
+	}
+	return userSetting
 }
 
 func AdminClearUserBinding(c *gin.Context) {
@@ -995,6 +1034,10 @@ func CreateUser(c *gin.Context) {
 			}
 		}
 	}
+	if user.GetSetting().GroupRatioOverrides != nil && !service.ValidateGroupRatioOverrides(user.GetSetting().GroupRatioOverrides) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if user.DisplayName == "" {
 		user.DisplayName = user.Username
 	}
@@ -1015,9 +1058,17 @@ func CreateUser(c *gin.Context) {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}
+		userSetting := cleanUser.GetSetting()
+		userSettingTouched := false
 		if user.AllowedModelGroups != nil {
-			userSetting := cleanUser.GetSetting()
 			userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(user.AllowedModelGroups)
+			userSettingTouched = true
+		}
+		if user.GetSetting().GroupRatioOverrides != nil {
+			userSetting.GroupRatioOverrides = service.NormalizeGroupRatioOverrides(user.GetSetting().GroupRatioOverrides)
+			userSettingTouched = true
+		}
+		if userSettingTouched {
 			cleanUser.SetSetting(userSetting)
 			if err := tx.Model(&model.User{}).Where("id = ?", cleanUser.Id).Update("setting", cleanUser.Setting).Error; err != nil {
 				return err
@@ -1059,10 +1110,7 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 	if c.GetInt("role") != common.RoleRootUser {
 		return false, fmt.Errorf("only root can update admin permissions")
 	}
-	if userRole < common.RoleAdminUser {
-		return true, authz.ClearUserAuthorizationInTx(tx, userID)
-	}
-	return true, authz.SetUserPermissionsInTx(tx, userID, permissions)
+	return true, authz.SetUserPermissionsForRoleInTx(tx, userID, userRole, permissions)
 }
 
 type ManageRequest struct {
