@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/service"
@@ -71,6 +72,10 @@ func fetchCodexChannelWhamData(
 	}
 	if ch == nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
+		return
+	}
+	if !channelVisibleToReader(c, ch) {
+		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
 	if ch.Type != constant.ChannelTypeCodex {

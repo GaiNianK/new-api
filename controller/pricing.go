@@ -21,17 +21,38 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	filtered := make([]model.Pricing, 0, len(pricing))
 	for _, item := range pricing {
 		if common.StringsContains(item.EnableGroup, "all") {
+			item.EnableGroup = pricingVisibleGroups(item.EnableGroup, usableGroup)
 			filtered = append(filtered, item)
 			continue
 		}
 		for _, group := range item.EnableGroup {
 			if _, ok := usableGroup[group]; ok {
+				item.EnableGroup = pricingVisibleGroups(item.EnableGroup, usableGroup)
 				filtered = append(filtered, item)
 				break
 			}
 		}
 	}
 	return filtered
+}
+
+func pricingVisibleGroups(modelGroups []string, usableGroup map[string]string) []string {
+	visible := make([]string, 0, len(modelGroups))
+	if common.StringsContains(modelGroups, "all") {
+		for group := range ratio_setting.GetGroupRatioCopy() {
+			if _, ok := usableGroup[group]; ok {
+				visible = append(visible, group)
+			}
+		}
+		return visible
+	}
+
+	for _, group := range modelGroups {
+		if _, ok := usableGroup[group]; ok {
+			visible = append(visible, group)
+		}
+	}
+	return visible
 }
 
 func buildUserGroupRatios(userGroup string, userSetting dto.UserSetting) map[string]float64 {

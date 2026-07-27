@@ -46,18 +46,28 @@ export function usePricingData() {
     if (!data?.data || !data?.vendors) return []
 
     const vendorMap = new Map(data.vendors.map((v) => [v.id, v]))
+    const visibleGroupSet = new Set(Object.keys(data.usable_group || {}))
+    const visibleGroupRatio = Object.fromEntries(
+      Object.entries(data.group_ratio || {}).filter(([group]) =>
+        visibleGroupSet.has(group)
+      )
+    )
 
     return data.data.map((model) => {
       const vendor = model.vendor_id
         ? vendorMap.get(model.vendor_id)
         : undefined
+      const enableGroups = Array.isArray(model.enable_groups)
+        ? model.enable_groups.filter((group) => visibleGroupSet.has(group))
+        : []
       return {
         ...model,
+        enable_groups: enableGroups,
         key: model.model_name,
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
+        group_ratio: visibleGroupRatio,
       }
     })
   }, [data])
@@ -65,7 +75,11 @@ export function usePricingData() {
   return {
     models,
     vendors: data?.vendors ?? [],
-    groupRatio: data?.group_ratio ?? {},
+    groupRatio: Object.fromEntries(
+      Object.entries(data?.group_ratio ?? {}).filter(([group]) =>
+        Object.prototype.hasOwnProperty.call(data?.usable_group ?? {}, group)
+      )
+    ),
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],

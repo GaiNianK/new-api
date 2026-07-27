@@ -36,6 +36,25 @@ func TestGetUserUsableGroupsWithSettingUsesSelectableAndAssignedUnion(t *testing
 	assert.NotContains(t, groups, "missing")
 }
 
+func TestGetUserAssignedModelGroupsWithSettingOnlyUsesExplicitValidGroups(t *testing.T) {
+	originalGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	defer func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	}()
+
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"public":"Public"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"public":1,"hidden":2}`))
+
+	groups := GetUserAssignedModelGroupsWithSetting(dto.UserSetting{
+		AllowedModelGroups: []string{" hidden ", "missing"},
+	})
+	assert.Contains(t, groups, "hidden")
+	assert.NotContains(t, groups, "public")
+	assert.NotContains(t, groups, "missing")
+}
+
 func TestGetUserUsableGroupsWithSettingEmptyAllowlistPreservesLegacyGroups(t *testing.T) {
 	originalGroups := setting.UserUsableGroups2JSONString()
 	originalRatios := ratio_setting.GroupRatio2JSONString()

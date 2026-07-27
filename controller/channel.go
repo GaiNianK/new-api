@@ -1337,6 +1337,9 @@ func GetTagModels(c *gin.Context) {
 
 	// Find the longest models string among all channels with the given tag
 	for _, channel := range channels {
+		if !channelVisibleToReader(c, channel) {
+			continue
+		}
 		if channel.Models != "" {
 			currentModels := strings.Split(channel.Models, ",")
 			if len(currentModels) > maxLength {

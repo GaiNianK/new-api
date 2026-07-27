@@ -38,6 +38,7 @@
     "@visactor/react-vchart": "^2.1.2",
     "@visactor/vchart": "^2.1.2",
     "ai": "^7.0.14",
+    "antd": "^6.5.2",
     "auto-skeleton-react": "^1.0.5",
     "axios": "catalog:",
     "class-variance-authority": "^0.7.1",

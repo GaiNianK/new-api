@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -236,6 +237,44 @@ func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {
 		"size":     3,
 		"identity": 1,
 	}, priceData.OtherRatios())
+}
+
+func TestRecalculateTaskQuotaByTokensUsesBillingContextRatios(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":9}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":9}`))
+
+	const userID, tokenID, channelID = 101, 101, 101
+	const initQuota, tokenRemain, preConsumed = 10000, 5000, 40
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-billing-context", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.ModelRatio = 2
+	task.PrivateData.BillingContext.GroupRatio = 0.25
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{"duration": 2}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	RecalculateTaskQuotaByTokens(ctx, task, 100)
+
+	const actualQuota = 100 // 100 tokens * model ratio 2 * frozen group ratio 0.25 * duration 2
+	assert.Equal(t, actualQuota, task.Quota)
+	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain-(actualQuota-preConsumed), getTokenRemainQuota(t, tokenID))
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, actualQuota-preConsumed, log.Quota)
+	assert.Equal(t, "default", log.Group)
 }
 
 // ---------------------------------------------------------------------------

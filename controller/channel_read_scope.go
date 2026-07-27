@@ -34,13 +34,7 @@ func channelReadScope(c *gin.Context) (bool, map[string]string) {
 			userSetting = setting
 		}
 	}
-	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	if userGroup == "" {
-		if group, err := model.GetUserGroup(c.GetInt("id"), false); err == nil {
-			userGroup = group
-		}
-	}
-	return true, service.GetUserUsableGroupsWithSetting(userGroup, userSetting)
+	return true, service.GetUserAssignedModelGroupsWithSetting(userSetting)
 }
 
 func channelIntersectsGroups(channel *model.Channel, groups map[string]string) bool {

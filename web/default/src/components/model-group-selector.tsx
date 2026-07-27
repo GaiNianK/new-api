@@ -714,7 +714,7 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
               ref={isSelected ? selectedGroupOptionRef : undefined}
               type='button'
             >
-              <span className='min-w-0 truncate font-medium'>
+              <span className='min-w-0 flex-1 whitespace-normal break-words font-medium'>
                 {group.label}
               </span>
               {hasGroupRatio(group) && (
@@ -806,7 +806,7 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
     <div
       className={
         isMobile
-          ? 'grid gap-3 p-2 md:grid-cols-[9.5rem_minmax(0,1fr)]'
+          ? 'grid gap-3 p-2 md:grid-cols-[12rem_minmax(0,1fr)]'
           : modelGroupSelectorLayoutClasses.desktopContent
       }
     >

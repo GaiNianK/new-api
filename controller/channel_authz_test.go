@@ -9,7 +9,11 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,6 +185,103 @@ func TestReadOnlyChannelScopeAndAPIAddressSanitization(t *testing.T) {
 	sanitizeChannelForReader(ctx, hidden)
 	require.NotNil(t, hidden.BaseURL)
 	assert.Equal(t, hiddenAPIAddressPlaceholder, *hidden.BaseURL)
+}
+
+func TestGetAllChannelsForReadOnlyUserUsesAssignedGroupsAndSanitizesAPIAddress(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	originalGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	defer func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	}()
+
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"public":"Public"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"public":1,"hidden":1,"other":1}`))
+
+	hiddenURL := "https://hidden.example.com"
+	publicURL := "https://public.example.com"
+	otherURL := "https://other.example.com"
+	require.NoError(t, model.DB.Create([]model.Channel{
+		{Id: 1, Name: "assigned-hidden", Type: constant.ChannelTypeOpenAI, Group: "hidden", BaseURL: &hiddenURL, HideAPIAddress: true, Status: common.ChannelStatusEnabled},
+		{Id: 2, Name: "global-public", Type: constant.ChannelTypeOpenAI, Group: "public", BaseURL: &publicURL, Status: common.ChannelStatusEnabled},
+		{Id: 3, Name: "unassigned-other", Type: constant.ChannelTypeOpenAI, Group: "other", BaseURL: &otherURL, Status: common.ChannelStatusEnabled},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/?page_size=20", nil)
+	ctx.Set("role", common.RoleCommonUser)
+	ctx.Set("id", 42)
+	common.SetContextKey(ctx, constant.ContextKeyUserSetting, dto.UserSetting{AllowedModelGroups: []string{"hidden"}})
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []*model.Channel `json:"items"`
+			Total int              `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, 1, response.Data.Total)
+	assert.Equal(t, "assigned-hidden", response.Data.Items[0].Name)
+	require.NotNil(t, response.Data.Items[0].BaseURL)
+	assert.Equal(t, hiddenAPIAddressPlaceholder, *response.Data.Items[0].BaseURL)
+}
+
+func TestGetChannelForReadOnlyUserRejectsUnassignedChannelAndSanitizesVisibleChannel(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	defer func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	}()
+
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"hidden":1,"other":1}`))
+	hiddenURL := "https://hidden.example.com"
+	otherURL := "https://other.example.com"
+	require.NoError(t, model.DB.Create([]model.Channel{
+		{Id: 10, Name: "assigned-hidden", Type: constant.ChannelTypeOpenAI, Group: "hidden", BaseURL: &hiddenURL, HideAPIAddress: true, Status: common.ChannelStatusEnabled},
+		{Id: 11, Name: "unassigned-other", Type: constant.ChannelTypeOpenAI, Group: "other", BaseURL: &otherURL, Status: common.ChannelStatusEnabled},
+	}).Error)
+
+	visibleRecorder := httptest.NewRecorder()
+	visibleCtx, _ := gin.CreateTestContext(visibleRecorder)
+	visibleCtx.Params = gin.Params{{Key: "id", Value: "10"}}
+	visibleCtx.Set("role", common.RoleCommonUser)
+	visibleCtx.Set("id", 42)
+	common.SetContextKey(visibleCtx, constant.ContextKeyUserSetting, dto.UserSetting{AllowedModelGroups: []string{"hidden"}})
+
+	GetChannel(visibleCtx)
+
+	var visibleResponse struct {
+		Success bool           `json:"success"`
+		Data    *model.Channel `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(visibleRecorder.Body.Bytes(), &visibleResponse))
+	require.True(t, visibleResponse.Success)
+	require.NotNil(t, visibleResponse.Data)
+	require.NotNil(t, visibleResponse.Data.BaseURL)
+	assert.Equal(t, hiddenAPIAddressPlaceholder, *visibleResponse.Data.BaseURL)
+
+	blockedRecorder := httptest.NewRecorder()
+	blockedCtx, _ := gin.CreateTestContext(blockedRecorder)
+	blockedCtx.Params = gin.Params{{Key: "id", Value: "11"}}
+	blockedCtx.Set("role", common.RoleCommonUser)
+	blockedCtx.Set("id", 42)
+	common.SetContextKey(blockedCtx, constant.ContextKeyUserSetting, dto.UserSetting{AllowedModelGroups: []string{"hidden"}})
+
+	GetChannel(blockedCtx)
+
+	var blockedResponse struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(blockedRecorder.Body.Bytes(), &blockedResponse))
+	assert.False(t, blockedResponse.Success)
 }
 
 // TestChannelFieldsAreClassified guards the fail-closed sensitivity check: every

@@ -62,6 +62,23 @@ func GetUserUsableGroupsWithSetting(userGroup string, userSetting dto.UserSettin
 	return result
 }
 
+// GetUserAssignedModelGroupsWithSetting returns only the real model groups explicitly assigned by an administrator.
+// Unlike GetUserUsableGroupsWithSetting, it intentionally excludes globally user-selectable groups.
+func GetUserAssignedModelGroupsWithSetting(userSetting dto.UserSetting) map[string]string {
+	allowed := NormalizeAllowedModelGroups(userSetting.AllowedModelGroups)
+	if len(allowed) == 0 {
+		return map[string]string{}
+	}
+	validGroups := ratio_setting.GetGroupRatioCopy()
+	result := make(map[string]string, len(allowed))
+	for _, group := range allowed {
+		if _, ok := validGroups[group]; ok {
+			result[group] = setting.GetUsableGroupDescription(group)
+		}
+	}
+	return result
+}
+
 func filterValidUserGroups(groups map[string]string, validGroups map[string]float64) map[string]string {
 	result := make(map[string]string, len(groups))
 	for group, desc := range groups {
