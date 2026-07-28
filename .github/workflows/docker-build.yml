@@ -40,6 +40,6 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: gainiank/new-api:${{ inputs.image_tag }}
+          tags: gainiank01/new-api:${{ inputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
