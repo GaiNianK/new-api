@@ -84,6 +84,10 @@ require (
 
 require github.com/Azure/go-ntlmssp v0.1.1
 
+require github.com/QuantumNous/new-api/relaykit v0.0.0
+
+replace github.com/QuantumNous/new-api/relaykit => ./relaykit
+
 require (
 	github.com/DmitriyVTitov/size v1.5.0 // indirect
 	github.com/anknown/darts v0.0.0-20151216065714-83ff685239e6 // indirect
