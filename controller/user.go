@@ -531,6 +531,24 @@ func GetSelf(c *gin.Context) {
 }
 
 // 计算用户权限的辅助函数
+// buildSelfUserData is the safe dashboard-user DTO shared by login and refresh.
+func buildSelfUserData(user *model.User) map[string]interface{} {
+	userSetting := user.GetSetting()
+	permissions := calculateUserPermissions(user.Role)
+	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	return map[string]interface{}{
+		"id": user.Id, "username": user.Username, "display_name": user.DisplayName,
+		"role": user.Role, "status": user.Status, "email": user.Email,
+		"github_id": user.GitHubId, "discord_id": user.DiscordId, "oidc_id": user.OidcId,
+		"wechat_id": user.WeChatId, "telegram_id": user.TelegramId, "group": user.Group,
+		"quota": user.Quota, "used_quota": user.UsedQuota, "request_count": user.RequestCount,
+		"aff_code": user.AffCode, "aff_count": user.AffCount, "aff_quota": user.AffQuota,
+		"aff_history_quota": user.AffHistoryQuota, "inviter_id": user.InviterId, "linux_do_id": user.LinuxDOId,
+		"setting": user.Setting, "stripe_customer": user.StripeCustomer,
+		"sidebar_modules": userSetting.SidebarModules, "permissions": permissions,
+	}
+}
+
 func calculateUserPermissions(userRole int) map[string]interface{} {
 	permissions := map[string]interface{}{}
 
