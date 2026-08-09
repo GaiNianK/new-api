@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -21,6 +22,7 @@ const (
 	dashboardCredentialUnmatched dashboardCredentialKind = iota
 	dashboardCredentialInternal
 	dashboardCredentialPAT
+	dashboardCredentialLegacySession
 )
 
 func authHelper(c *gin.Context, minRole int) {
@@ -104,7 +106,15 @@ func authenticateDashboardRequest(c *gin.Context) (*model.UserBase, service.Auth
 func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
 	raw, ok := authorizationToken(c.GetHeader("Authorization"))
 	if !ok {
-		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
+		userID, ok := sessions.Default(c).Get("id").(int)
+		if !ok || userID <= 0 {
+			return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
+		}
+		user, err := model.GetUserCache(userID)
+		if err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialLegacySession, err
+		}
+		return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialLegacySession, nil
 	}
 	identity, internal, err := service.ParseDashboardAccessToken(raw)
 	if internal {
