@@ -195,6 +195,15 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
+	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModePerSecond {
+		var ok bool
+		modelPrice, ok = billing_setting.GetDefaultVideoPrice(info.OriginModelName)
+		if !ok {
+			return types.PriceData{}, fmt.Errorf("model %s is configured as per_second but has no valid video price", info.OriginModelName)
+		}
+		usePrice = true
+		success = true
+	}
 	var modelRatio float64
 
 	if !success {
@@ -259,6 +268,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 }
 
 func HasModelBillingConfig(modelName string) bool {
+	if billing_setting.GetBillingMode(modelName) == billing_setting.BillingModePerSecond {
+		_, ok := billing_setting.GetDefaultVideoPrice(modelName)
+		return ok
+	}
 	if _, ok := ratio_setting.GetModelPrice(modelName, false); ok {
 		return true
 	}

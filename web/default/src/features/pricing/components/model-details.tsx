@@ -34,7 +34,10 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
-import { StaticDataTable } from '@/components/data-table'
+import {
+  StaticDataTable,
+  type StaticDataTableColumn,
+} from '@/components/data-table'
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { GroupBadge } from '@/components/group-badge'
 import { PublicLayout } from '@/components/layout'
@@ -72,7 +75,12 @@ import {
   getConfiguredGroupRatio,
   isTokenBasedModel,
 } from '../lib/model-helpers'
-import { formatFixedPrice, formatGroupPrice } from '../lib/price'
+import {
+  formatFixedPrice,
+  formatGroupPrice,
+  formatVideoResolutionPrice,
+  getVideoResolutionPrices,
+} from '../lib/price'
 import type {
   ModelCapability,
   PriceType,
@@ -582,6 +590,7 @@ function PriceSection(props: {
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
   const baseGroupKey = '_base'
   const baseGroupRatioMap = { [baseGroupKey]: 1 }
+  const videoResolutionPrices = getVideoResolutionPrices(props.model)
   const dynamicSummary = getDynamicPricingSummary(props.model, {
     tokenUnit: props.tokenUnit,
     showRechargePrice: props.showRechargePrice,
@@ -707,12 +716,62 @@ function PriceSection(props: {
   }
 
   if (!isTokenBased) {
+    if (
+      props.model.billing_unit === 'second' &&
+      videoResolutionPrices.length > 0
+    ) {
+      return (
+        <section>
+          <SectionTitle>{t('Base Price')}</SectionTitle>
+          <StaticDataTable
+            tableClassName='text-sm'
+            data={videoResolutionPrices}
+            getRowKey={([resolution]) => resolution}
+            columns={[
+              {
+                id: 'resolution',
+                header: t('Resolution'),
+                cellClassName: 'py-2.5 font-medium',
+                cell: ([resolution]) => resolution,
+              },
+              {
+                id: 'price',
+                header: t('Per second'),
+                className: 'text-right',
+                cellClassName: 'py-2.5 text-right font-mono',
+                cell: ([resolution]) => (
+                  <>
+                    {formatVideoResolutionPrice(
+                      props.model,
+                      resolution,
+                      baseGroupKey,
+                      props.showRechargePrice,
+                      props.priceRate,
+                      props.usdExchangeRate,
+                      baseGroupRatioMap
+                    )}
+                    <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+                      / {t('seconds')}
+                    </span>
+                  </>
+                ),
+              },
+            ]}
+          />
+        </section>
+      )
+    }
+
     return (
       <section>
         <SectionTitle>{t('Base Price')}</SectionTitle>
         <div className='flex items-baseline justify-between'>
           <span className='text-muted-foreground text-sm'>
-            {t('Per request')}
+            {t(
+              props.model.billing_unit === 'second'
+                ? 'Per second'
+                : 'Per request'
+            )}
           </span>
           <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
             {formatFixedPrice(
@@ -873,6 +932,7 @@ function GroupPricingSection(props: {
 
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
+  const videoResolutionPrices = getVideoResolutionPrices(props.model)
 
   const extraPriceTypes = useMemo(() => {
     const types: { label: string; type: PriceType }[] = []
@@ -1045,6 +1105,85 @@ function GroupPricingSection(props: {
       props.usdExchangeRate,
       props.groupRatio
     )
+  const renderVideoGroupPrice = (group: string, resolution: string) => (
+    <>
+      {formatVideoResolutionPrice(
+        props.model,
+        resolution,
+        group,
+        showRechargePrice,
+        props.priceRate,
+        props.usdExchangeRate,
+        props.groupRatio
+      )}
+      <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+        / {t('seconds')}
+      </span>
+    </>
+  )
+  const groupPricingColumns: StaticDataTableColumn<string>[] = [
+    {
+      id: 'group',
+      header: t('Group'),
+      className: thClass,
+      cellClassName: 'py-2.5',
+      cell: (group) => <GroupBadge group={group} size='sm' />,
+    },
+    {
+      id: 'ratio',
+      header: t('Ratio'),
+      className: thClass,
+      cellClassName: 'text-muted-foreground py-2.5 font-mono',
+      cell: (group) => `${getConfiguredGroupRatio(props.groupRatio, group)}x`,
+    },
+  ]
+
+  if (isTokenBased) {
+    groupPricingColumns.push(
+      {
+        id: 'input',
+        header: t('Input'),
+        className: `${thClass} text-right`,
+        cellClassName: 'py-2.5 text-right font-mono',
+        cell: (group) => renderGroupPrice(group, 'input'),
+      },
+      {
+        id: 'output',
+        header: t('Output'),
+        className: `${thClass} text-right`,
+        cellClassName: 'py-2.5 text-right font-mono',
+        cell: (group) => renderGroupPrice(group, 'output'),
+      },
+      ...extraPriceTypes.map((extraPrice) => ({
+        id: extraPrice.type,
+        header: extraPrice.label,
+        className: `${thClass} text-right`,
+        cellClassName: 'py-2.5 text-right font-mono',
+        cell: (group: string) => renderGroupPrice(group, extraPrice.type),
+      }))
+    )
+  } else if (
+    props.model.billing_unit === 'second' &&
+    videoResolutionPrices.length > 0
+  ) {
+    groupPricingColumns.push(
+      ...videoResolutionPrices.map(([resolution]) => ({
+        id: `video-${resolution}`,
+        header: resolution,
+        className: `${thClass} text-right`,
+        cellClassName: 'py-2.5 text-right font-mono whitespace-nowrap',
+        cell: (group: string) => renderVideoGroupPrice(group, resolution),
+      }))
+    )
+  } else {
+    groupPricingColumns.push({
+      id: 'price',
+      header: t('Price'),
+      className: `${thClass} text-right`,
+      cellClassName: 'py-2.5 text-right font-mono',
+      cell: renderFixedGroupPrice,
+    })
+  }
 
   return (
     <section>
@@ -1056,56 +1195,7 @@ function GroupPricingSection(props: {
         headerRowClassName='hover:bg-transparent'
         data={availableGroups}
         getRowKey={(group) => group}
-        columns={[
-          {
-            id: 'group',
-            header: t('Group'),
-            className: thClass,
-            cellClassName: 'py-2.5',
-            cell: (group) => <GroupBadge group={group} size='sm' />,
-          },
-          {
-            id: 'ratio',
-            header: t('Ratio'),
-            className: thClass,
-            cellClassName: 'text-muted-foreground py-2.5 font-mono',
-            cell: (group) =>
-              `${getConfiguredGroupRatio(props.groupRatio, group)}x`,
-          },
-          ...(isTokenBased
-            ? [
-                {
-                  id: 'input',
-                  header: t('Input'),
-                  className: `${thClass} text-right`,
-                  cellClassName: 'py-2.5 text-right font-mono',
-                  cell: (group: string) => renderGroupPrice(group, 'input'),
-                },
-                {
-                  id: 'output',
-                  header: t('Output'),
-                  className: `${thClass} text-right`,
-                  cellClassName: 'py-2.5 text-right font-mono',
-                  cell: (group: string) => renderGroupPrice(group, 'output'),
-                },
-                ...extraPriceTypes.map((ep) => ({
-                  id: ep.type,
-                  header: ep.label,
-                  className: `${thClass} text-right`,
-                  cellClassName: 'py-2.5 text-right font-mono',
-                  cell: (group: string) => renderGroupPrice(group, ep.type),
-                })),
-              ]
-            : [
-                {
-                  id: 'price',
-                  header: t('Price'),
-                  className: `${thClass} text-right`,
-                  cellClassName: 'py-2.5 text-right font-mono',
-                  cell: renderFixedGroupPrice,
-                },
-              ]),
-        ]}
+        columns={groupPricingColumns}
       />
       <div className='-mx-4 sm:mx-0'>
         {isTokenBased && (

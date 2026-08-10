@@ -19,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -194,6 +195,33 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	if billing_setting.GetBillingMode(modelName) == billing_setting.BillingModePerSecond {
+		resolution := c.GetString(relaycommon.TaskBillingResolutionKey)
+		unitPrice, ok := billing_setting.ResolveVideoPrice(modelName, resolution)
+		if !ok {
+			return nil, service.TaskErrorWrapperLocal(
+				fmt.Errorf("model %s has no per-second price for resolution %q", modelName, resolution),
+				"video_resolution_price_not_configured",
+				http.StatusBadRequest,
+			)
+		}
+
+		// The configured resolution price is absolute, so provider resolution
+		// multipliers must not be applied a second time.
+		ratios := withoutTaskResolutionRatios(info.PriceData.OtherRatios())
+		info.PriceData.ReplaceOtherRatios(ratios)
+		baseQuota, err := common.QuotaFromFloatStrict(
+			unitPrice * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio,
+		)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData.ModelPrice = unitPrice
+		info.PriceData.Quota = baseQuota
+		info.PriceData.UsePrice = true
+		info.PriceData.FreeModel = unitPrice == 0 || info.PriceData.GroupRatioInfo.GroupRatio == 0
+	}
+
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
@@ -243,6 +271,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+		if billing_setting.GetBillingMode(modelName) == billing_setting.BillingModePerSecond {
+			adjustedRatios = withoutTaskResolutionRatios(adjustedRatios)
+		}
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota
@@ -257,6 +288,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+func withoutTaskResolutionRatios(ratios map[string]float64) map[string]float64 {
+	filtered := make(map[string]float64, len(ratios))
+	for key, ratio := range ratios {
+		if key == "size" || key == "resolution" || strings.HasPrefix(key, "resolution-") {
+			continue
+		}
+		filtered[key] = ratio
+	}
+	return filtered
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。

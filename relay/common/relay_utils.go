@@ -133,6 +133,15 @@ func GetTaskRequest(c *gin.Context) (TaskSubmitReq, error) {
 	return req, nil
 }
 
+func hasWan30Media(metadata map[string]interface{}) bool {
+	input, ok := metadata["input"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	media, ok := input["media"].([]interface{})
+	return ok && len(media) > 0
+}
+
 func validatePrompt(prompt string) *dto.TaskError {
 	if strings.TrimSpace(prompt) == "" {
 		return createTaskError(fmt.Errorf("prompt is required"), "invalid_request", http.StatusBadRequest, true)
@@ -231,7 +240,9 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	}
 
 	if taskErr := validatePrompt(prompt); taskErr != nil {
-		return taskErr
+		if model != "wan3.0-video" || !hasWan30Media(req.Metadata) {
+			return taskErr
+		}
 	}
 
 	if taskErr := validateTaskDurationBounds(req); taskErr != nil {

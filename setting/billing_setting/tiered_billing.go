@@ -2,6 +2,8 @@ package billing_setting
 
 import (
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -11,29 +13,29 @@ import (
 const (
 	BillingModeRatio      = "ratio"
 	BillingModeTieredExpr = "tiered_expr"
+	BillingModePerSecond  = "per_second"
 	BillingModeField      = "billing_mode"
 	BillingExprField      = "billing_expr"
+	VideoPriceField       = "video_price"
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr
+// DB keys: billing_setting.billing_mode, billing_setting.billing_expr, billing_setting.video_price
 type BillingSetting struct {
-	BillingMode map[string]string `json:"billing_mode"`
-	BillingExpr map[string]string `json:"billing_expr"`
+	BillingMode map[string]string             `json:"billing_mode"`
+	BillingExpr map[string]string             `json:"billing_expr"`
+	VideoPrice  map[string]map[string]float64 `json:"video_price"`
 }
 
 var billingSetting = BillingSetting{
 	BillingMode: make(map[string]string),
 	BillingExpr: make(map[string]string),
+	VideoPrice:  make(map[string]map[string]float64),
 }
 
 func init() {
 	config.GlobalConfig.Register("billing_setting", &billingSetting)
 }
-
-// ---------------------------------------------------------------------------
-// Read accessors (hot path, must be fast)
-// ---------------------------------------------------------------------------
 
 func GetBillingMode(model string) string {
 	if mode, ok := billingSetting.BillingMode[model]; ok {
@@ -55,20 +57,81 @@ func GetBillingExprCopy() map[string]string {
 	return lo.Assign(billingSetting.BillingExpr)
 }
 
+func GetVideoPrice(model string) (map[string]float64, bool) {
+	prices, ok := billingSetting.VideoPrice[model]
+	if !ok {
+		return nil, false
+	}
+	return lo.Assign(prices), true
+}
+
+func GetVideoPriceCopy() map[string]map[string]float64 {
+	result := make(map[string]map[string]float64, len(billingSetting.VideoPrice))
+	for model, prices := range billingSetting.VideoPrice {
+		result[model] = lo.Assign(prices)
+	}
+	return result
+}
+
+// ResolveVideoPrice checks the requested resolution, then the default price.
+func ResolveVideoPrice(model string, resolution string) (float64, bool) {
+	prices, ok := billingSetting.VideoPrice[model]
+	if !ok {
+		return 0, false
+	}
+	resolution = strings.ToLower(strings.TrimSpace(resolution))
+	if resolution != "" {
+		for configuredResolution, price := range prices {
+			if strings.ToLower(strings.TrimSpace(configuredResolution)) == resolution && validVideoPrice(price) {
+				return price, true
+			}
+		}
+	}
+	for configuredResolution, price := range prices {
+		if strings.EqualFold(strings.TrimSpace(configuredResolution), "default") && validVideoPrice(price) {
+			return price, true
+		}
+	}
+	return 0, false
+}
+
+// GetDefaultVideoPrice is used for pre-consume and catalog display.
+func GetDefaultVideoPrice(model string) (float64, bool) {
+	if price, ok := ResolveVideoPrice(model, ""); ok {
+		return price, true
+	}
+	prices, ok := billingSetting.VideoPrice[model]
+	if !ok {
+		return 0, false
+	}
+	var lowest float64
+	found := false
+	for _, price := range prices {
+		if validVideoPrice(price) && (!found || price < lowest) {
+			lowest = price
+			found = true
+		}
+	}
+	return lowest, found
+}
+
+func validVideoPrice(price float64) bool {
+	return price >= 0 && !math.IsNaN(price) && !math.IsInf(price, 0)
+}
+
 func GetPricingSyncData(base map[string]any) map[string]any {
-	extra := make(map[string]any, 2)
+	extra := make(map[string]any, 3)
 	if modes := GetBillingModeCopy(); len(modes) > 0 {
 		extra[BillingModeField] = modes
 	}
 	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
 		extra[BillingExprField] = exprs
 	}
+	if prices := GetVideoPriceCopy(); len(prices) > 0 {
+		extra[VideoPriceField] = prices
+	}
 	return lo.Assign(base, extra)
 }
-
-// ---------------------------------------------------------------------------
-// Smoke test (called externally for validation before save)
-// ---------------------------------------------------------------------------
 
 func SmokeTestExpr(exprStr string) error {
 	return smokeTestExpr(exprStr)

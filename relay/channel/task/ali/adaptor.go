@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,7 @@ type AliVideoInput struct {
 
 // AliVideoParameters 视频参数
 type AliVideoParameters struct {
+	Ratio        string `json:"ratio,omitempty"`
 	Resolution   string `json:"resolution,omitempty"`    // 分辨率: 480P/720P/1080P（图生视频、首尾帧生视频）
 	Size         string `json:"size,omitempty"`          // 尺寸: 如 "832*480"（文生视频）
 	Duration     int    `json:"duration,omitempty"`      // 时长: 3-10秒
@@ -87,9 +89,10 @@ type AliVideoOutput struct {
 
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration   dto.IntValue `json:"duration,omitempty"`
-	VideoCount dto.IntValue `json:"video_count,omitempty"`
-	SR         dto.IntValue `json:"SR,omitempty"`
+	OutputVideoDuration float64      `json:"output_video_duration,omitempty"`
+	Duration            dto.IntValue `json:"duration,omitempty"`
+	VideoCount          dto.IntValue `json:"video_count,omitempty"`
+	SR                  dto.IntValue `json:"SR,omitempty"`
 }
 
 type AliMetadata struct {
@@ -272,6 +275,10 @@ func isWan27I2VModel(model string) bool {
 	return strings.HasPrefix(model, "wan2.7-i2v")
 }
 
+func isWan30VideoModel(model string) bool {
+	return model == Wan30VideoModel
+}
+
 func isHappyHorseModel(model string) bool {
 	return strings.HasPrefix(model, "happyhorse-")
 }
@@ -383,6 +390,39 @@ func normalizeHappyHorseInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmi
 	return nil
 }
 
+func normalizeWan30Input(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
+	if !isWan30VideoModel(aliReq.Model) {
+		return nil
+	}
+
+	if len(aliReq.Input.Media) == 0 {
+		firstFrameURL := firstNonEmpty(aliReq.Input.FirstFrameURL, aliReq.Input.ImgURL, firstTaskImage(req))
+		lastFrameURL := firstNonEmpty(aliReq.Input.LastFrameURL, secondTaskImage(req))
+		if firstFrameURL != "" {
+			aliReq.Input.Media = append(aliReq.Input.Media, AliVideoMedia{Type: "first_frame", URL: firstFrameURL})
+		}
+		if lastFrameURL != "" {
+			aliReq.Input.Media = append(aliReq.Input.Media, AliVideoMedia{Type: "last_frame", URL: lastFrameURL})
+		}
+	}
+
+	if strings.TrimSpace(aliReq.Input.Prompt) == "" && len(aliReq.Input.Media) == 0 {
+		return fmt.Errorf("%s requires prompt or input.media", Wan30VideoModel)
+	}
+	allowedMediaTypes := []string{"first_frame", "last_frame", "reference_image", "reference_video", "reference_audio", "file", "link"}
+	for _, media := range aliReq.Input.Media {
+		if !lo.Contains(allowedMediaTypes, media.Type) || strings.TrimSpace(media.URL) == "" {
+			return fmt.Errorf("%s input.media contains an invalid type or empty url", Wan30VideoModel)
+		}
+	}
+
+	aliReq.Input.ImgURL = ""
+	aliReq.Input.FirstFrameURL = ""
+	aliReq.Input.LastFrameURL = ""
+	aliReq.Input.AudioURL = ""
+	return nil
+}
+
 func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
 	if !isWan27I2VModel(aliReq.Model) {
 		return nil
@@ -461,6 +501,9 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		}
 	} else if isHappyHorseModel(aliReq.Model) {
 		aliReq.Parameters.Resolution = "1080P"
+	} else if isWan30VideoModel(aliReq.Model) {
+		aliReq.Parameters.Resolution = "1080P"
+		aliReq.Parameters.Ratio = "adaptive"
 	} else {
 		// 根据模型设置默认分辨率
 		if strings.Contains(req.Model, "t2v") { // image to video
@@ -516,10 +559,32 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	if aliReq.Model != upstreamModel {
 		return nil, errors.New("can't change model with metadata")
 	}
+	if aliReq.Parameters == nil {
+		return nil, errors.New("parameters cannot be null")
+	}
+	if isWan30VideoModel(aliReq.Model) {
+		aliReq.Parameters.Resolution = strings.ToUpper(strings.TrimSpace(aliReq.Parameters.Resolution))
+		if !lo.Contains([]string{"480P", "720P", "1080P"}, aliReq.Parameters.Resolution) {
+			return nil, fmt.Errorf("%s resolution must be 480P, 720P, or 1080P", Wan30VideoModel)
+		}
+		if strings.TrimSpace(aliReq.Parameters.Ratio) == "" {
+			aliReq.Parameters.Ratio = "adaptive"
+		}
+		if !lo.Contains([]string{"adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"}, aliReq.Parameters.Ratio) {
+			return nil, fmt.Errorf("%s ratio is invalid", Wan30VideoModel)
+		}
+	}
 	if isHappyHorseModel(aliReq.Model) && (aliReq.Parameters.Duration < 3 || aliReq.Parameters.Duration > 15) {
 		return nil, fmt.Errorf("happyhorse duration must be between 3 and 15 seconds")
 	}
+	if isWan30VideoModel(aliReq.Model) && (aliReq.Parameters.Duration < 2 || aliReq.Parameters.Duration > 30) {
+		return nil, fmt.Errorf("%s duration must be between 2 and 30 seconds; intelligent duration -1 is not supported for accurate billing", Wan30VideoModel)
+	}
 	if err := normalizeHappyHorseInput(aliReq, req); err != nil {
+		return nil, err
+	}
+
+	if err := normalizeWan30Input(aliReq, req); err != nil {
 		return nil, err
 	}
 
@@ -548,6 +613,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	otherRatios := map[string]float64{
 		"seconds": float64(min(aliReq.Parameters.Duration, relaycommon.MaxTaskDurationSeconds)),
 	}
+	c.Set(relaycommon.TaskBillingResolutionKey, aliReq.Parameters.Resolution)
 	ratios, err := ProcessAliOtherRatios(aliReq)
 	if err != nil {
 		return otherRatios
@@ -639,6 +705,21 @@ func (a *TaskAdaptor) GetChannelName() string {
 }
 
 // ParseTaskResult 解析任务结果
+func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int {
+	if task == nil || taskResult == nil || taskResult.DurationSeconds <= 0 || taskResult.DurationSeconds > 30 {
+		return 0
+	}
+	modelName := task.Properties.OriginModelName
+	if modelName != Wan30VideoModel || billing_setting.GetBillingMode(modelName) != billing_setting.BillingModePerSecond {
+		return 0
+	}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.ModelPrice < 0 || bc.GroupRatio < 0 {
+		return 0
+	}
+	return common.QuotaFromFloat(bc.ModelPrice * common.QuotaPerUnit * bc.GroupRatio * taskResult.DurationSeconds)
+}
+
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	var aliResp AliVideoResponse
 	if err := common.Unmarshal(respBody, &aliResp); err != nil {
@@ -647,6 +728,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 	taskResult := relaycommon.TaskInfo{
 		Code: 0,
+	}
+	if aliResp.Usage != nil && aliResp.Usage.OutputVideoDuration > 0 && aliResp.Usage.OutputVideoDuration <= float64(relaycommon.MaxTaskDurationSeconds) {
+		taskResult.DurationSeconds = aliResp.Usage.OutputVideoDuration
 	}
 
 	// 状态映射

@@ -208,6 +208,57 @@ export function formatGroupPrice(
 }
 
 /**
+ * Return valid video resolution prices in a stable display order.
+ */
+export function getVideoResolutionPrices(
+  model: PricingModel
+): [string, number][] {
+  return Object.entries(model.video_price ?? {})
+    .filter(
+      ([resolution, price]) =>
+        resolution.trim().length > 0 && Number.isFinite(price) && price >= 0
+    )
+    .sort(([left], [right]) => {
+      const leftPixels = Number.parseInt(left, 10)
+      const rightPixels = Number.parseInt(right, 10)
+      if (Number.isFinite(leftPixels) && Number.isFinite(rightPixels)) {
+        return leftPixels - rightPixels || left.localeCompare(right)
+      }
+      if (Number.isFinite(leftPixels)) return -1
+      if (Number.isFinite(rightPixels)) return 1
+      return left.localeCompare(right)
+    })
+}
+
+export function formatVideoResolutionPrice(
+  model: PricingModel,
+  resolution: string,
+  group: string,
+  showWithRecharge = false,
+  priceRate = 1,
+  usdExchangeRate = 1,
+  groupRatio: Record<string, number>
+): string {
+  const unitPrice = model.video_price?.[resolution]
+  if (!Number.isFinite(unitPrice) || Number(unitPrice) < 0) return '-'
+
+  const ratio = getConfiguredGroupRatio(groupRatio, group)
+  let priceInUSD = Number(unitPrice) * ratio
+  priceInUSD = applyRechargeRate(
+    priceInUSD,
+    showWithRecharge,
+    priceRate,
+    usdExchangeRate
+  )
+
+  return formatCurrencyFromUSD(priceInUSD, {
+    digitsLarge: 4,
+    digitsSmall: 4,
+    abbreviate: false,
+  })
+}
+
+/**
  * Format fixed price for pay-per-request models (with specific group)
  */
 export function formatFixedPrice(
@@ -255,7 +306,12 @@ export function formatRequestPrice(
 
   const displayGroupRatio = getDisplayGroupRatio(model, selectedGroup)
 
-  let priceInUSD = (model.model_price || 0) * displayGroupRatio
+  const videoPrices = getVideoResolutionPrices(model).map(([, price]) => price)
+  const unitPrice =
+    model.billing_unit === 'second' && videoPrices.length > 0
+      ? Math.min(...videoPrices)
+      : model.model_price || 0
+  let priceInUSD = unitPrice * displayGroupRatio
 
   priceInUSD = applyRechargeRate(
     priceInUSD,

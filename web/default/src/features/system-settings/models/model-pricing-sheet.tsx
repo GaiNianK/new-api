@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { AlertTriangle, Save } from 'lucide-react'
+import { AlertTriangle, Plus, Save, Trash2 } from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -78,6 +78,7 @@ import {
   type ModelPricingFormValues,
   type ModelRatioData,
   type PricingMode,
+  type VideoPriceRow,
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
@@ -155,6 +156,10 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [videoPriceRows, setVideoPriceRows] = useState<VideoPriceRow[]>([
+    { id: '720p', resolution: '720p', price: '' },
+    { id: '1080p', resolution: '1080p', price: '' },
+  ])
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -188,15 +193,26 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      let nextPricingMode: PricingMode = 'per-token'
+      if (editData.billingMode === 'tiered_expr') {
+        nextPricingMode = 'tiered_expr'
+      } else if (editData.billingMode === 'per_second') {
+        nextPricingMode = 'per_second'
+      } else if (editData.price) {
+        nextPricingMode = 'per-request'
+      }
+      setPricingMode(nextPricingMode)
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
+      setVideoPriceRows(
+        Object.entries(editData.videoPrices ?? {}).map(
+          ([resolution, price], index) => ({
+            id: `${resolution}-${index}`,
+            resolution,
+            price,
+          })
+        )
+      )
     } else {
       form.reset({
         name: '',
@@ -212,6 +228,10 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
+      setVideoPriceRows([
+        { id: '720p', resolution: '720p', price: '' },
+        { id: '1080p', resolution: '1080p', price: '' },
+      ])
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -435,8 +455,38 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    if (pricingMode === 'per_second') {
+      const normalized = videoPriceRows.map((row) => ({
+        resolution: row.resolution.trim().toLowerCase(),
+        price: toNumberOrNull(row.price),
+      }))
+      const resolutions = normalized.map((row) => row.resolution)
+      if (
+        normalized.length === 0 ||
+        normalized.some(
+          (row) => !row.resolution || row.price === null || row.price < 0
+        ) ||
+        new Set(resolutions).size !== resolutions.length
+      ) {
+        form.setError('price', {
+          message: t(
+            'Each resolution needs a unique name and a valid non-negative price.'
+          ),
+        })
+        return false
+      }
+    }
+
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [
+    form,
+    laneEnabled,
+    lanePrices,
+    pricingMode,
+    promptPrice,
+    t,
+    videoPriceRows,
+  ])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
@@ -457,10 +507,18 @@ export const ModelPricingEditorPanel = forwardRef<
         data.billingExpr = billingExpr
         data.requestRuleExpr = requestRuleExpr
       }
+      if (pricingMode === 'per_second') {
+        data.videoPrices = Object.fromEntries(
+          videoPriceRows.map((row) => [
+            row.resolution.trim().toLowerCase(),
+            row.price,
+          ])
+        )
+      }
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [billingExpr, pricingMode, requestRuleExpr, videoPriceRows]
   )
 
   useImperativeHandle(
@@ -544,12 +602,15 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-3'>
+                  <TabsList className='grid w-full grid-cols-2 sm:grid-cols-4'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
                     <TabsTrigger value='per-request'>
                       {t('Per-request')}
+                    </TabsTrigger>
+                    <TabsTrigger value='per_second'>
+                      {t('Per-second')}
                     </TabsTrigger>
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
@@ -636,6 +697,96 @@ export const ModelPricingEditorPanel = forwardRef<
                           </FormItem>
                         )}
                       />
+                    </FieldGroup>
+                  </TabsContent>
+
+                  <TabsContent value='per_second' className='pt-0'>
+                    <FieldGroup className='gap-4'>
+                      {videoPriceRows.map((row) => (
+                        <div
+                          key={row.id}
+                          className='grid grid-cols-[minmax(100px,1fr)_minmax(130px,1fr)_auto] items-end gap-2'
+                        >
+                          <Field>
+                            <FieldLabel>{t('Resolution')}</FieldLabel>
+                            <Input
+                              value={row.resolution}
+                              placeholder='1080p'
+                              onChange={(event) =>
+                                setVideoPriceRows((rows) =>
+                                  rows.map((item) =>
+                                    item.id === row.id
+                                      ? {
+                                          ...item,
+                                          resolution: event.target.value,
+                                        }
+                                      : item
+                                  )
+                                )
+                              }
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel>{t('Price per second')}</FieldLabel>
+                            <InputGroup>
+                              <InputGroupAddon>$</InputGroupAddon>
+                              <InputGroupInput
+                                inputMode='decimal'
+                                value={row.price}
+                                placeholder='0.09'
+                                onChange={(event) => {
+                                  const value = event.target.value
+                                  if (!numericDraftRegex.test(value)) return
+                                  setVideoPriceRows((rows) =>
+                                    rows.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, price: value }
+                                        : item
+                                    )
+                                  )
+                                }}
+                              />
+                              <InputGroupAddon align='inline-end'>
+                                / {t('seconds')}
+                              </InputGroupAddon>
+                            </InputGroup>
+                          </Field>
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon'
+                            aria-label={t('Delete resolution')}
+                            onClick={() =>
+                              setVideoPriceRows((rows) =>
+                                rows.filter((item) => item.id !== row.id)
+                              )
+                            }
+                          >
+                            <Trash2 />
+                          </Button>
+                        </div>
+                      ))}
+                      <Button
+                        type='button'
+                        variant='outline'
+                        className='w-fit'
+                        onClick={() =>
+                          setVideoPriceRows((rows) => [
+                            ...rows,
+                            {
+                              id: crypto.randomUUID(),
+                              resolution: '',
+                              price: '',
+                            },
+                          ])
+                        }
+                      >
+                        <Plus data-icon='inline-start' />
+                        {t('Add resolution')}
+                      </Button>
+                      <FormMessage>
+                        {form.formState.errors.price?.message}
+                      </FormMessage>
                     </FieldGroup>
                   </TabsContent>
 

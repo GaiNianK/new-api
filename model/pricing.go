@@ -35,6 +35,8 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
+	BillingUnit            string                  `json:"billing_unit,omitempty"`
+	VideoPrice             map[string]float64      `json:"video_price,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
 }
 
@@ -400,10 +402,21 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
+		billingMode := billing_setting.GetBillingMode(model)
+		if billingMode == billing_setting.BillingModeTieredExpr {
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
+			}
+		} else if billingMode == billing_setting.BillingModePerSecond {
+			if prices, ok := billing_setting.GetVideoPrice(model); ok && len(prices) > 0 {
+				pricing.BillingMode = billingMode
+				pricing.BillingUnit = "second"
+				pricing.VideoPrice = prices
+				pricing.QuotaType = 1
+				if price, found := billing_setting.GetDefaultVideoPrice(model); found {
+					pricing.ModelPrice = price
+				}
 			}
 		}
 		pricingMap = append(pricingMap, pricing)
@@ -411,7 +424,7 @@ func updatePricing() {
 
 	// 防止大更新后数据不通用
 	if len(pricingMap) > 0 {
-		pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
+		pricingMap[0].PricingVersion = "9449408c5751d666177e70de5d67d537506476a87413c4c7537f07ccfbd987ce"
 	}
 
 	// 刷新缓存映射，供高并发快速查询

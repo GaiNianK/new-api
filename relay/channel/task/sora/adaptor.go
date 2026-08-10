@@ -118,6 +118,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	if size == "" {
 		size = "720x1280"
 	}
+	c.Set(relaycommon.TaskBillingResolutionKey, size)
 
 	ratios := map[string]float64{
 		"seconds": float64(seconds),
