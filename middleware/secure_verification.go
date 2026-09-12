@@ -2,9 +2,12 @@ package middleware
 
 import (
 	"net/http"
-	"time"
+	"strconv"
+	"strings"
 
-	"github.com/gin-contrib/sessions"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -21,14 +24,17 @@ const (
 // 如果未验证或验证已过期，返回 401 错误
 func SecureVerificationRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查用户是否已登录
-		userId := c.GetInt("id")
-		if userId == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "未登录",
-			})
-			c.Abort()
+		channelID, err := strconv.Atoi(c.Param("id"))
+		if err != nil || channelID <= 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "code": "SECURITY_CONTEXT_INVALID", "message": service.ErrVerificationContextInvalid.Error()})
+			return
+		}
+		context, err := common.Marshal(service.ChannelKeyReadContext{ChannelID: channelID})
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		if RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeChannelKeyRead, Context: context}) == nil {
 			return
 		}
 
@@ -77,57 +83,53 @@ func SecureVerificationRequired() gin.HandlerFunc {
 	}
 }
 
-func clearSecureVerificationSession(session sessions.Session) {
-	session.Delete(SecureVerificationSessionKey)
-	session.Delete(secureVerificationMethodSessionKey)
-	_ = session.Save()
-}
-
-// OptionalSecureVerification 可选的安全验证中间件
-// 如果用户已验证，则在 context 中设置标记，但不阻止请求继续
-// 用于某些需要区分是否已验证的场景
-func OptionalSecureVerification() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userId := c.GetInt("id")
-		if userId == 0 {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		session := sessions.Default(c)
-		verifiedAtRaw := session.Get(SecureVerificationSessionKey)
-
-		if verifiedAtRaw == nil {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		verifiedAt, ok := verifiedAtRaw.(int64)
-		if !ok {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		elapsed := time.Now().Unix() - verifiedAt
-		if elapsed >= SecureVerificationTimeout {
-			clearSecureVerificationSession(session)
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		c.Set("secure_verified", true)
-		c.Set("secure_verified_at", verifiedAt)
-		c.Next()
+// RequireSecurityProof validates a proof against the authenticated dashboard
+// session and writes the shared proof error contract on failure.
+func RequireSecurityProof(c *gin.Context, operation service.VerificationOperation) *model.AuthFlowAuthorization {
+	identity, ok := GetSessionAuthIdentity(c)
+	if !ok {
+		securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
+		return nil
 	}
+	raw := strings.TrimSpace(c.GetHeader("X-Security-Proof"))
+	if raw == "" {
+		securityProofError(c, "SECURITY_PROOF_REQUIRED", "需要安全验证")
+		return nil
+	}
+	authorization, err := service.ConsumeOperationProof(raw, identity, operation)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAuthTokenExpired):
+			securityProofError(c, "SECURITY_PROOF_EXPIRED", "安全验证已过期")
+		case errors.Is(err, service.ErrProofScope):
+			securityProofError(c, "SECURITY_PROOF_SCOPE_MISMATCH", "安全验证范围不匹配")
+		case errors.Is(err, service.ErrVerificationUnavailable):
+			securityProofError(c, "SECURITY_METHOD_UNAVAILABLE", service.ErrVerificationUnavailable.Error())
+		case errors.Is(err, service.ErrProofMethod):
+			securityProofError(c, "SECURITY_PROOF_METHOD_MISMATCH", "安全验证方式不匹配")
+		case errors.Is(err, service.ErrProofConsumed):
+			securityProofError(c, "SECURITY_PROOF_CONSUMED", "This verification has already been used. Please verify again.")
+		case errors.Is(err, service.ErrProofContext):
+			securityProofError(c, "SECURITY_PROOF_CONTEXT_MISMATCH", "Verification does not match this action's details. Please verify again.")
+		case errors.Is(err, service.ErrVerificationForbidden):
+			securityProofError(c, "SECURITY_ACTION_FORBIDDEN", service.ErrVerificationForbidden.Error())
+		case errors.Is(err, service.ErrAuthTokenInvalid), errors.Is(err, service.ErrLoginSessionInvalid), errors.Is(err, service.ErrLoginSessionRevoked), errors.Is(err, model.ErrUserSessionInactive):
+			securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
+		default:
+			_ = c.Error(err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"success": false, "code": "AUTH_INTERNAL_ERROR", "message": "Please try again later."})
+		}
+		return nil
+	}
+	return authorization
 }
 
-// ClearSecureVerification 清除安全验证状态
-// 用于用户登出或需要强制重新验证的场景
-func ClearSecureVerification(c *gin.Context) {
-	session := sessions.Default(c)
-	clearSecureVerificationSession(session)
+func securityProofError(c *gin.Context, code, message string) {
+	c.Set("security_error_code", code)
+	c.JSON(http.StatusForbidden, gin.H{
+		"success": false,
+		"message": message,
+		"code":    code,
+	})
+	c.Abort()
 }

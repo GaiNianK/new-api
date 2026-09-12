@@ -1,6 +1,11 @@
 package setting
 
 import (
+	"fmt"
+	"slices"
+	"strconv"
+	"sync/atomic"
+
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -11,12 +16,7 @@ var autoGroups = []string{
 var DefaultUseAutoGroup = false
 
 func ContainsAutoGroup(group string) bool {
-	for _, autoGroup := range autoGroups {
-		if autoGroup == group {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(autoGroups, group)
 }
 
 func UpdateAutoGroupsByJsonString(jsonString string) error {

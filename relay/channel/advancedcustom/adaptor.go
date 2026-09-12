@@ -193,6 +193,68 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	return a.routeURL(info)
 }
 
+func (a *Adaptor) BuildModelListRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
+	return a.buildManagementRequest(info, dto.AdvancedCustomModelListPath)
+}
+
+func (a *Adaptor) BuildBalanceRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
+	return a.buildManagementRequest(info, dto.AdvancedCustomBalancePath)
+}
+
+func (a *Adaptor) buildManagementRequest(info *relaycommon.RelayInfo, managementPath string) (string, http.Header, error) {
+	if info == nil {
+		return "", nil, errors.New("missing relay info")
+	}
+	config := info.ChannelOtherSettings.AdvancedCustom
+	if config == nil {
+		return "", nil, errors.New("advanced_custom is required")
+	}
+	if err := config.Validate(); err != nil {
+		return "", nil, err
+	}
+	var route dto.AdvancedCustomRoute
+	var ok bool
+	switch managementPath {
+	case dto.AdvancedCustomModelListPath:
+		route, ok = config.ModelListRoute()
+	case dto.AdvancedCustomBalancePath:
+		route, ok = config.BalanceRoute()
+	default:
+		return "", nil, fmt.Errorf("unsupported advanced custom management path: %s", managementPath)
+	}
+	if !ok {
+		return "", nil, fmt.Errorf("advanced custom channel does not configure a %s route", managementPath)
+	}
+	converter := strings.TrimSpace(route.Converter)
+	if converter == "" {
+		converter = relayconvert.ConverterNone
+	}
+	if converter != relayconvert.ConverterNone {
+		return "", nil, fmt.Errorf("converter %q does not support %s requests", converter, managementPath)
+	}
+
+	requestURL, err := buildRouteURL(route, converter, info)
+	if err != nil {
+		return "", nil, err
+	}
+
+	header := http.Header{}
+	auth := route.Auth
+	if auth == nil {
+		header.Set("Authorization", "Bearer "+info.ApiKey)
+		return requestURL, header, nil
+	}
+
+	switch strings.TrimSpace(auth.Type) {
+	case dto.AdvancedCustomAuthTypeNone, dto.AdvancedCustomAuthTypeQuery:
+	case dto.AdvancedCustomAuthTypeHeader:
+		header.Set(strings.TrimSpace(auth.Name), applyAuthTemplate(auth.Value, info.ApiKey))
+	default:
+		return "", nil, fmt.Errorf("invalid advanced custom auth type: %s", auth.Type)
+	}
+	return requestURL, header, nil
+}
+
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {
 	if err := a.resolve(c, info); err != nil {
 		return err

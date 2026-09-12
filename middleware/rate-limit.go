@@ -18,6 +18,71 @@ var defNext = func(c *gin.Context) {
 	c.Next()
 }
 
+func redisIPRateLimitKey(mark string, clientIP string) string {
+	return fmt.Sprintf("%s:ip:%s:%s", redisRateLimitNamespace, mark, clientIP)
+}
+
+func redisUserRateLimitKey(mark string, userID int) string {
+	return fmt.Sprintf("%s:user:%s:%d", redisRateLimitNamespace, mark, userID)
+}
+
+func redisReplyInteger(value any) (int64, error) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, nil
+	case string:
+		return strconv.ParseInt(typed, 10, 64)
+	case []byte:
+		return strconv.ParseInt(string(typed), 10, 64)
+	default:
+		return 0, fmt.Errorf("unexpected Redis integer reply type %T", value)
+	}
+}
+
+func redisFixedWindowTake(ctx context.Context, key string, maxRequestNum int, duration int64) (bool, int64, int64, error) {
+	if common.RDB == nil {
+		return false, 0, 0, errors.New("Redis client is not initialized")
+	}
+	if key == "" {
+		return false, 0, 0, errors.New("rate limit key is empty")
+	}
+	if maxRequestNum <= 0 {
+		return false, 0, 0, errors.New("rate limit maximum must be positive")
+	}
+	if duration <= 0 {
+		return false, 0, 0, errors.New("rate limit duration must be positive")
+	}
+
+	values, err := common.RDB.Eval(
+		ctx,
+		redisFixedWindowScript,
+		[]string{key},
+		maxRequestNum,
+		duration,
+	).Slice()
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if len(values) != 3 {
+		return false, 0, 0, fmt.Errorf("unexpected Redis rate limit reply length %d", len(values))
+	}
+
+	allowedValue, err := redisReplyInteger(values[0])
+	if err != nil {
+		return false, 0, 0, err
+	}
+	count, err := redisReplyInteger(values[1])
+	if err != nil {
+		return false, 0, 0, err
+	}
+	ttlSeconds, err := redisReplyInteger(values[2])
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	return allowedValue == 1, count, ttlSeconds, nil
+}
+
 func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {
 	ctx := context.Background()
 	rdb := common.RDB

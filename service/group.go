@@ -25,12 +25,16 @@ func GetUserUsableGroupsWithSetting(userGroup string, userSetting dto.UserSettin
 	if userGroup != "" {
 		if specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup); ok {
 			for specialGroup, desc := range specialSettings {
-				switch {
-				case strings.HasPrefix(specialGroup, "-:"):
-					delete(groupsCopy, strings.TrimPrefix(specialGroup, "-:"))
-				case strings.HasPrefix(specialGroup, "+:"):
-					groupsCopy[strings.TrimPrefix(specialGroup, "+:")] = desc
-				default:
+				if after, ok := strings.CutPrefix(specialGroup, "-:"); ok {
+					// 移除分组
+					groupToRemove := after
+					delete(groupsCopy, groupToRemove)
+				} else if after, ok := strings.CutPrefix(specialGroup, "+:"); ok {
+					// 添加分组
+					groupToAdd := after
+					groupsCopy[groupToAdd] = desc
+				} else {
+					// 直接添加分组
 					groupsCopy[specialGroup] = desc
 				}
 			}

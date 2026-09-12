@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -34,76 +35,11 @@ func validUserInfo(username string, role int) bool {
 	return true
 }
 
-func legacyAuthHelper(c *gin.Context, minRole int) {
-	session := sessions.Default(c)
-	username := session.Get("username")
-	role := session.Get("role")
-	id := session.Get("id")
-	status := session.Get("status")
-	useAccessToken := false
-	if username == nil {
-		// Check access token
-		accessToken := c.Request.Header.Get("Authorization")
-		if accessToken == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
-			})
-			c.Abort()
-			return
-		}
-		user, authErr := model.ValidateAccessToken(accessToken)
-		if authErr != nil {
-			if errors.Is(authErr, model.ErrDatabase) {
-				common.SysLog("ValidateAccessToken database error: " + authErr.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
-				})
-			} else {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
-				})
-			}
-			c.Abort()
-			return
-		}
-		if user != nil && user.Username != "" {
-			if !validUserInfo(user.Username, user.Role) {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
-				})
-				c.Abort()
-				return
-			}
-			// Token is valid
-			username = user.Username
-			role = user.Role
-			id = user.Id
-			status = user.Status
-			useAccessToken = true
-		} else {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
-			})
-			c.Abort()
-			return
-		}
+func authHelper(c *gin.Context, minRole int) {
+	if _, started := c.Get(accessTokenAuditContextKey); !started {
+		defer finishAccessTokenAudit(c)
 	}
-	// get header New-Api-User
-	apiUserIdStr := c.Request.Header.Get("New-Api-User")
-	if apiUserIdStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdNotProvided),
-		})
-		c.Abort()
-		return
-	}
-	apiUserId, err := strconv.Atoi(apiUserIdStr)
+	user, identity, useAccessToken, err := authenticateDashboardRequest(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
@@ -169,10 +105,16 @@ func legacyAuthHelper(c *gin.Context, minRole int) {
 
 func legacyTryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		session := sessions.Default(c)
-		id := session.Get("id")
-		if id != nil {
-			c.Set("id", id)
+		if _, started := c.Get(accessTokenAuditContextKey); !started {
+			defer finishAccessTokenAudit(c)
+		}
+		user, identity, credentialKind, err := classifyDashboardCredential(c)
+		if err != nil {
+			writeDashboardAuthError(c, err)
+			return
+		}
+		if credentialKind != dashboardCredentialUnmatched {
+			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
 		}
 		c.Next()
 	}
@@ -194,6 +136,123 @@ func RootAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authHelper(c, common.RoleRootUser)
 	}
+}
+
+// GetAuthIdentity returns a dashboard session identity. PAT-authenticated
+// requests intentionally have no SessionID and cannot manage browser sessions.
+func GetAuthIdentity(c *gin.Context) (service.AuthIdentity, bool) {
+	value, ok := c.Get(authIdentityContextKey)
+	if !ok {
+		return service.AuthIdentity{}, false
+	}
+	identity, ok := value.(service.AuthIdentity)
+	return identity, ok
+}
+
+// GetSessionAuthIdentity returns only identities backed by a live dashboard
+// session. PAT-authenticated requests intentionally fail this check.
+func GetSessionAuthIdentity(c *gin.Context) (service.AuthIdentity, bool) {
+	identity, ok := GetAuthIdentity(c)
+	if !ok {
+		identity = service.AuthIdentity{
+			UserID:          c.GetInt("id"),
+			SessionID:       c.GetString("session_id"),
+			UserAuthVersion: c.GetInt64("auth_version"),
+			SessionVersion:  c.GetInt64("session_version"),
+		}
+	}
+	if identity.UserID <= 0 || identity.SessionID == "" || identity.UserAuthVersion <= 0 || identity.SessionVersion <= 0 {
+		return service.AuthIdentity{}, false
+	}
+	return identity, true
+}
+
+func authenticateDashboardRequest(c *gin.Context) (*model.UserBase, service.AuthIdentity, bool, error) {
+	user, identity, credentialKind, err := classifyDashboardCredential(c)
+	if err != nil {
+		return nil, service.AuthIdentity{}, credentialKind == dashboardCredentialPAT, err
+	}
+	if credentialKind == dashboardCredentialUnmatched {
+		return nil, service.AuthIdentity{}, false, service.ErrAuthTokenInvalid
+	}
+	return user, identity, credentialKind == dashboardCredentialPAT, nil
+}
+
+func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+	raw, ok := authorizationToken(c.GetHeader("Authorization"))
+	if !ok {
+		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
+	}
+	identity, internal, err := service.ParseDashboardAccessToken(raw)
+	if internal {
+		if err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
+		_, user, err := service.ValidateLoginSession(identity)
+		if err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
+		return user, identity, dashboardCredentialInternal, nil
+	}
+	patUser, err := model.ValidateAccessToken(raw)
+	if err != nil {
+		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
+	}
+	if patUser == nil || patUser.Id <= 0 {
+		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
+	}
+	beginAccessTokenAudit(c, patUser, raw)
+	user, err := model.GetUserCache(patUser.Id)
+	if err != nil {
+		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
+	}
+	return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialPAT, nil
+}
+
+func authorizationToken(header string) (string, bool) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "", false
+	}
+	parts := strings.Fields(header)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		header = parts[1]
+	} else if len(parts) != 1 {
+		return "", false
+	}
+	return header, header != ""
+}
+
+func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity service.AuthIdentity, useAccessToken bool) {
+	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
+	c.Set("username", user.Username)
+	c.Set("role", user.Role)
+	c.Set("id", user.Id)
+	c.Set("group", user.Group)
+	c.Set("user_group", user.Group)
+	c.Set("use_access_token", useAccessToken)
+	c.Set("session_id", identity.SessionID)
+	c.Set("auth_version", identity.UserAuthVersion)
+	c.Set("session_version", identity.SessionVersion)
+	c.Set(authIdentityContextKey, identity)
+	user.WriteContext(c)
+}
+
+func writeDashboardAuthError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrAuthTokenExpired) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_TOKEN_EXPIRED", "message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn)})
+		return
+	}
+	if errors.Is(err, service.ErrLoginSessionRevoked) || errors.Is(err, gorm.ErrRecordNotFound) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_SESSION_REVOKED", "message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn)})
+		return
+	}
+	if errors.Is(err, service.ErrAuthTokenInvalid) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_UNAUTHORIZED", "message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid)})
+		return
+	}
+	common.SysLog("dashboard authentication error: " + err.Error())
+	c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"success": false, "code": "AUTH_INTERNAL_ERROR", "message": common.TranslateMessage(c, i18n.MsgDatabaseError)})
 }
 
 func RequirePermission(permission authz.Permission) func(c *gin.Context) {
@@ -318,8 +377,8 @@ func TokenAuth() func(c *gin.Context) {
 			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
 			// read sk from Sec-WebSocket-Protocol
 			key := c.Request.Header.Get("Sec-WebSocket-Protocol")
-			parts := strings.Split(key, ",")
-			for _, part := range parts {
+			parts := strings.SplitSeq(key, ",")
+			for part := range parts {
 				part = strings.TrimSpace(part)
 				if strings.HasPrefix(part, "openai-insecure-api-key") {
 					key = strings.TrimPrefix(part, "openai-insecure-api-key.")
@@ -336,7 +395,8 @@ func TokenAuth() func(c *gin.Context) {
 			}
 		}
 		// gemini api 从query中获取key
-		if strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
+		if c.Request.URL.Path == "/v1/models" ||
+			strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1beta/openai/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
 			skKey := c.Query("key")
@@ -471,7 +531,17 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
-			c.Set("specific_channel_id", parts[1])
+			id, err := strconv.Atoi(parts[1])
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
+				return fmt.Errorf("invalid specific channel id")
+			}
+			service.GetChannelConstraints(c).AddPin(dto.ChannelPin{
+				ChannelId: id,
+				Source:    dto.PinSourceToken,
+				Rank:      dto.PinRankToken,
+				RetryMode: dto.PinRetrySingleAttempt,
+			})
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")
 			abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")

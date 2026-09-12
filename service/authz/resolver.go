@@ -1,11 +1,20 @@
 package authz
 
+import "slices"
+
 import "github.com/casbin/casbin/v2"
 
 // Can reports whether the subject may perform the permission. A superuser role
 // short-circuits to allow. Otherwise a per-user override wins, then the union of
 // the subject's role baselines applies.
 func Can(userID int, systemRole int, permission Permission) bool {
+	roles := resolveSubjectRoles(userID, systemRole)
+	if len(roles) == 0 {
+		return false
+	}
+	if slices.ContainsFunc(roles, isSuperuserRole) {
+		return true
+	}
 	if !isKnownPermission(permission) {
 		return false
 	}
