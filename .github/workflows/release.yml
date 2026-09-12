@@ -47,7 +47,7 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile
+          bun install --filter ./classic --frozen-lockfile --linker isolated
           cd classic
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
@@ -111,7 +111,7 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile
+          bun install --filter ./classic --frozen-lockfile --linker isolated
           cd classic
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
@@ -172,7 +172,7 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile
+          bun install --filter ./classic --frozen-lockfile --linker isolated
           cd classic
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
