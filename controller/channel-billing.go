@@ -21,7 +21,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/shopspring/decimal"
 
@@ -158,7 +157,7 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	for k := range headers {
 		req.Header.Add(k, headers.Get(k))
 	}
-	client, err := service.NewProxyHttpClient(channel.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithProxy(channel.GetSetting().Proxy)
 	if err != nil {
 		return nil, err
 	}

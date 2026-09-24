@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,11 +9,12 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	passkeysvc "github.com/QuantumNous/new-api/service/passkey"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
@@ -49,7 +51,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -109,7 +111,9 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"options": creation,
+			"options":    creation,
+			"flow_token": flowToken,
+			"expires_at": expiresAt,
 		},
 	})
 }
@@ -123,7 +127,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -178,7 +182,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 	}
 
 	waUser := passkeysvc.NewWebAuthnUser(user, credentialRecord)
-	credential, err := wa.FinishRegistration(waUser, *sessionData, c.Request)
+	credential, err := wa.CreateCredential(waUser, *sessionData, parsedCredential)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -205,11 +209,12 @@ func PasskeyRegisterFinish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Passkey 注册成功",
+		"data":    authRotationData(bundle),
 	})
 }
 
 func PasskeyDelete(c *gin.Context) {
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -238,11 +243,12 @@ func PasskeyDelete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Passkey 已解绑",
+		"data":    authRotationData(bundle),
 	})
 }
 
 func PasskeyStatus(c *gin.Context) {
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -402,7 +408,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 		return passkeysvc.NewWebAuthnUser(user, credential), nil
 	}
 
-	waUser, credential, err := wa.FinishPasskeyLogin(handler, *sessionData, c.Request)
+	waUser, credential, err := wa.ValidatePasskeyLogin(handler, *sessionData, parsedCredential)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -492,7 +498,7 @@ func PasskeyVerifyBegin(c *gin.Context) {
 		return
 	}
 
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -574,7 +580,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		return
 	}
 
-	user, err := getSessionUser(c)
+	user, err := getAuthenticatedUser(c)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -630,7 +636,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		return
 	}
 	waUser := passkeysvc.NewWebAuthnUser(user, credential)
-	_, err = wa.FinishLogin(waUser, *sessionData, c.Request)
+	validatedCredential, err := wa.ValidateLogin(waUser, *sessionData, parsedCredential)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
