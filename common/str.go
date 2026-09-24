@@ -4,12 +4,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unsafe"
-
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 
 	"github.com/samber/lo"
 )

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 type stringWriter interface {
@@ -74,8 +73,6 @@ func (r CustomEvent) Render(w http.ResponseWriter) error {
 }
 
 func (r CustomEvent) WriteContentType(w http.ResponseWriter) {
-	r.Mutex.Lock()
-	defer r.Mutex.Unlock()
 	header := w.Header()
 	header["Content-Type"] = writeContentType
 
