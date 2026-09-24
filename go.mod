@@ -33,7 +33,7 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/jinzhu/copier v0.4.0
 	github.com/joho/godotenv v1.5.1
-	github.com/klauspost/compress v1.18.3
+	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/mewkiz/flac v1.0.13
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/pkg/errors v0.9.1
@@ -90,22 +90,17 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 )
 
-require github.com/Azure/go-ntlmssp v0.1.1
-
 require (
-	github.com/ClickHouse/clickhouse-go/v2 v2.32.0
-	github.com/QuantumNous/new-api/relaykit v0.0.0
+	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/grafana/sobek v0.0.0-20260708062710-267a0e055bb4
 	github.com/openai/openai-go v1.12.0
 )
 
-replace github.com/QuantumNous/new-api/relaykit => ./relaykit
-
 require (
 	github.com/DmitriyVTitov/size v1.5.0 // indirect
 	github.com/anknown/darts v0.0.0-20151216065714-83ff685239e6 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -119,7 +114,7 @@ require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/expr-lang/expr v1.17.8
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2
@@ -145,7 +140,6 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
