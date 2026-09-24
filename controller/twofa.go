@@ -9,8 +9,8 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -82,6 +82,7 @@ func Disable2FA(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "两步验证已禁用",
+		"data":    authRotationData(bundle),
 	})
 }
 
@@ -157,12 +158,12 @@ func RegenerateBackupCodes(c *gin.Context) {
 	// 记录操作日志
 	recordUserSecurityAudit(c, userId, "user.2fa_backup_codes", nil)
 
+	data := authRotationData(bundle)
+	data["backup_codes"] = backupCodes
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "备用码重新生成成功",
-		"data": map[string]interface{}{
-			"backup_codes": backupCodes,
-		},
+		"data":    data,
 	})
 }
 
@@ -219,7 +220,7 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFA(userId); err != nil {
+	if err := model.DisableTwoFAWithAuthVersion(userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
