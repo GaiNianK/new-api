@@ -14,14 +14,23 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+)
+
+const authIdentityContextKey = "auth_identity"
+
+type dashboardCredentialKind int
+
+const (
+	dashboardCredentialUnmatched dashboardCredentialKind = iota
+	dashboardCredentialInternal
+	dashboardCredentialPAT
 )
 
 func validUserInfo(username string, role int) bool {
@@ -41,54 +50,22 @@ func authHelper(c *gin.Context, minRole int) {
 	}
 	user, identity, useAccessToken, err := authenticateDashboardRequest(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdFormatError),
-		})
-		c.Abort()
-		return
-
-	}
-	if id != apiUserId {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
-		})
-		c.Abort()
+		writeDashboardAuthError(c, err)
 		return
 	}
-	if status.(int) == common.UserStatusDisabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
-		})
-		c.Abort()
+	if user.Status != common.UserStatusEnabled {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	if role.(int) < minRole {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
-		})
-		c.Abort()
+	if user.Role < minRole {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE", "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
 		return
 	}
-	if !validUserInfo(username.(string), role.(int)) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
-		})
-		c.Abort()
+	if !validUserInfo(user.Username, user.Role) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_INVALID", "message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid)})
 		return
 	}
-	// 防止不同newapi版本冲突，导致数据不通用
-	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
-	c.Set("username", username)
-	c.Set("role", role)
-	c.Set("id", id)
-	c.Set("group", session.Get("group"))
-	c.Set("user_group", session.Get("group"))
-	c.Set("use_access_token", useAccessToken)
+	setDashboardAuthContext(c, user, identity, useAccessToken)
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
 	// 的写接口都会自动留痕（无需在路由上单独挂审计中间件，避免漏挂）。
@@ -103,7 +80,7 @@ func authHelper(c *gin.Context, minRole int) {
 	finishAdminAudit(c, auditWriter)
 }
 
-func legacyTryUserAuth() func(c *gin.Context) {
+func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		if _, started := c.Get(accessTokenAuditContextKey); !started {
 			defer finishAccessTokenAudit(c)
@@ -277,18 +254,29 @@ func WssAuth(c *gin.Context) {
 
 // TokenOrUserAuth allows either session-based user auth or API token auth.
 // Used for endpoints that need to be accessible from both the dashboard and API clients.
-func legacyTokenOrUserAuth() func(c *gin.Context) {
+func TokenOrUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		// Try session auth first (dashboard users)
-		session := sessions.Default(c)
-		if id := session.Get("id"); id != nil {
-			if status, ok := session.Get("status").(int); ok && status == common.UserStatusEnabled {
-				c.Set("id", id)
-				c.Next()
+		raw, ok := authorizationToken(c.GetHeader("Authorization"))
+		if ok {
+			identity, internal, err := service.ParseDashboardAccessToken(raw)
+			if !internal {
+				TokenAuth()(c)
 				return
 			}
+			if err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			_, user, err := service.ValidateLoginSession(identity)
+			if err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			setDashboardAuthContext(c, user, identity, false)
+			c.Next()
+			return
 		}
-		// Fall back to token auth (API clients)
+		// Opaque credentials are relay API keys here, never dashboard PATs.
 		TokenAuth()(c)
 	}
 }
@@ -465,11 +453,10 @@ func TokenAuth() func(c *gin.Context) {
 		userCache.WriteContext(c)
 
 		userGroup := userCache.Group
-		userSetting := userCache.GetSetting()
 		tokenGroup := token.Group
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
-			if !service.GroupInUserUsableGroupsWithSetting(userGroup, tokenGroup, userSetting) {
+			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}
@@ -481,10 +468,6 @@ func TokenAuth() func(c *gin.Context) {
 				}
 			}
 			userGroup = tokenGroup
-		}
-		if !service.GroupInUserUsableGroupsWithSetting(userCache.Group, userGroup, userSetting) {
-			abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", userGroup))
-			return
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
 
@@ -540,6 +523,16 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	if token.AutoGroups != "" {
+		autoGroups, err := token.GetAutoGroups()
+		if err != nil {
+			common.SysError(fmt.Sprintf("failed to parse auto groups for token %d: %v", token.Id, err))
+			autoGroups = []string{}
+			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
+		} else if len(autoGroups) > 0 {
+			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
+		}
+	}
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
 			id, err := strconv.Atoi(parts[1])
