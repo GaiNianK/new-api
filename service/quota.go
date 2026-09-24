@@ -8,11 +8,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -103,15 +103,21 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	textOutTokens := usage.OutputTokenDetails.TextTokens
 	audioInputTokens := usage.InputTokenDetails.AudioTokens
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
+	groupRatio := ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
 
 	autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
 	if exists {
+		groupRatio = ratio_setting.GetGroupRatio(autoGroup.(string))
+		logger.LogDebug(ctx, "final group ratio: %f", groupRatio)
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	actualGroupRatio := GetUserGroupRatioWithSetting(relayInfo.UserGroup, relayInfo.UsingGroup, relayInfo.UserSetting)
-	logger.LogDebug(ctx, "final group ratio: %f", actualGroupRatio)
+	actualGroupRatio := groupRatio
+	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
+	if ok {
+		actualGroupRatio = userGroupRatio
+	}
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
@@ -480,7 +486,7 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 		}
 		if quotaTooLow {
 			prompt := "您的额度即将用尽"
-			topUpLink := PaymentReturnURL("/console/topup")
+			topUpLink := PaymentReturnURL("/wallet")
 
 			// 根据通知方式生成不同的内容格式
 			var content string
@@ -534,7 +540,7 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 		}
 
 		prompt := "您的订阅额度即将用尽"
-		topUpLink := PaymentReturnURL("/console/topup")
+		topUpLink := PaymentReturnURL("/wallet")
 
 		var content string
 		var values []any

@@ -326,7 +326,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	if priceData.GroupRatioInfo.HasUserGroupOverride {
-		other["user_group_ratio_override"] = priceData.GroupRatioInfo.UserGroupOverrideRatio
+		other.SetPublic("user_group_ratio_override", priceData.GroupRatioInfo.UserGroupOverrideRatio)
 	}
 	appendRequestPath(nil, relayInfo, other)
 	return other

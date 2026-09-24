@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -120,11 +119,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	filters := GetChannelConstraints(param.Ctx).Filters
 
 	if param.TokenGroup == "auto" {
-		if len(setting.GetAutoGroups()) == 0 {
+		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
+		if len(autoGroups) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")
 		}
-		userSetting, _ := common.GetContextKeyType[dto.UserSetting](param.Ctx, constant.ContextKeyUserSetting)
-		autoGroups := GetUserAutoGroupWithSetting(userGroup, userSetting)
 
 		// startGroupIndex: the group index to start searching from
 		// startGroupIndex: 开始搜索的分组索引
