@@ -17,6 +17,9 @@ var (
 )
 
 var (
+	TrimEffortSuffix              = func(modelName string) (string, string, bool) {
+		return kitreasoning.TrimEffortSuffixWithSuffixes(modelName, kitreasoning.EffortSuffixes)
+	}
 	TrimEffortSuffixWithSuffixes  = kitreasoning.TrimEffortSuffixWithSuffixes
 	ParseDeepSeekV4ThinkingSuffix = kitreasoning.ParseDeepSeekV4ThinkingSuffix
 	TrimGeminiThinkingSuffix      = kitreasoning.TrimGeminiThinkingSuffix

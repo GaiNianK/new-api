@@ -22,23 +22,26 @@ const (
 	BillingModeTieredExpr   = "tiered_expr"
 	BillingModeField        = "billing_mode"
 	BillingExprField        = "billing_expr"
+	VideoPriceField         = "video_price"
 	PluginBillingExprOption = "billing_setting.plugin_billing_expr"
 	maxTaskExprSmokeTests   = 64
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
-// billing_setting.plugin_billing_expr
+// billing_setting.plugin_billing_expr, billing_setting.video_price
 type BillingSetting struct {
-	BillingMode       map[string]string `json:"billing_mode"`
-	BillingExpr       map[string]string `json:"billing_expr"`
-	PluginBillingExpr map[string]string `json:"plugin_billing_expr"`
+	BillingMode       map[string]string             `json:"billing_mode"`
+	BillingExpr       map[string]string             `json:"billing_expr"`
+	PluginBillingExpr map[string]string             `json:"plugin_billing_expr"`
+	VideoPrice        map[string]map[string]float64 `json:"video_price"`
 }
 
 var billingSetting = BillingSetting{
 	BillingMode:       make(map[string]string),
 	BillingExpr:       make(map[string]string),
 	PluginBillingExpr: make(map[string]string),
+	VideoPrice:        make(map[string]map[string]float64),
 }
 
 func init() {
