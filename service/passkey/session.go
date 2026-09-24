@@ -1,11 +1,12 @@
 package passkey
 
 import (
-	"encoding/json"
 	"errors"
+	"time"
 
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-gonic/gin"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+
 	webauthn "github.com/go-webauthn/webauthn/webauthn"
 	"gorm.io/gorm"
 )
@@ -28,8 +29,7 @@ type FlowSecurity struct {
 
 func CreateSessionDataFlow(purpose string, security FlowSecurity, data *webauthn.SessionData) (string, int64, error) {
 	if data == nil {
-		session.Delete(key)
-		return session.Save()
+		return "", 0, errors.New("Passkey 会话数据不能为空")
 	}
 	if purpose == model.AuthFlowPurposeLoginPasskey {
 		if security.UserID <= 0 || security.UserAuthVersion <= 0 || security.LoginFlowID <= 0 || security.LoginExpiresAt <= time.Now().Unix() || security.SessionID != "" || security.SessionVersion != 0 {
@@ -43,7 +43,7 @@ func CreateSessionDataFlow(purpose string, security FlowSecurity, data *webauthn
 	}
 	payload, err := common.Marshal(flowPayload{SessionData: *data, Security: security})
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	expiresAt := time.Now().Add(passkeyFlowTTL)
 	if purpose == model.AuthFlowPurposeLoginPasskey && security.LoginExpiresAt < expiresAt.Unix() {
