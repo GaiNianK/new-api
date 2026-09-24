@@ -77,7 +77,7 @@ func (t *TwoFA) updateUsageState() error {
 func (t *TwoFA) ResetFailedAttempts() error {
 	t.FailedAttempts = 0
 	t.LockedUntil = nil
-	return t.Update()
+	return t.updateUsageState()
 }
 
 // IncrementFailedAttempts 增加失败尝试次数

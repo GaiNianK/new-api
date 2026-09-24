@@ -534,10 +534,7 @@ func inviteUser(inviterId int) error {
 	if result.Error != nil {
 		return result.Error
 	}
-	user.AffCount++
-	user.AffQuota += common.QuotaForInviter
-	user.AffHistoryQuota += common.QuotaForInviter
-	return DB.Save(user).Error
+	return nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {

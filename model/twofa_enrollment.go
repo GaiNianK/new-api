@@ -11,6 +11,7 @@ import (
 
 var ErrTwoFASetupInvalid = errors.New("The two-factor setup has expired or changed. Start setup again.")
 var ErrTwoFACodeInvalid = errors.New("The authenticator code is incorrect.")
+var ErrTwoFAAlreadyEnabled = errors.New("Two-factor authentication is already enabled.")
 
 type twoFAEnrollmentPayload struct {
 	TwoFAID       int                    `json:"twofa_id"`
