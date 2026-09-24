@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -18,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -224,7 +222,6 @@ func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
 }
 
 func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T) {
-
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()
 	savedModelRatios := ratio_setting.ModelRatio2JSONString()
