@@ -3,27 +3,20 @@ package service
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/gin-gonic/gin"
 )
 
 func GetUserUsableGroups(userGroup string) map[string]string {
-	return GetUserUsableGroupsWithSetting(userGroup, dto.UserSetting{})
-}
-
-// GetUserUsableGroupsWithSetting returns groups available to a user. An empty
-// allowlist preserves the legacy user-group behavior. A non-empty allowlist
-// combines globally selectable groups with administrator-assigned groups.
-func GetUserUsableGroupsWithSetting(userGroup string, userSetting dto.UserSetting) map[string]string {
-	globalGroups := setting.GetUserUsableGroupsCopy()
-	groupsCopy := make(map[string]string, len(globalGroups))
-	for group, desc := range globalGroups {
-		groupsCopy[group] = desc
-	}
-	validGroups := ratio_setting.GetGroupRatioCopy()
+	groupsCopy := setting.GetUserUsableGroupsCopy()
 	if userGroup != "" {
-		if specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup); ok {
+		specialSettings, b := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
+		if b {
+			// 处理特殊可用分组
 			for specialGroup, desc := range specialSettings {
 				if after, ok := strings.CutPrefix(specialGroup, "-:"); ok {
 					// 移除分组
@@ -39,71 +32,12 @@ func GetUserUsableGroupsWithSetting(userGroup string, userSetting dto.UserSettin
 				}
 			}
 		}
+		// 如果userGroup不在UserUsableGroups中，返回UserUsableGroups + userGroup
 		if _, ok := groupsCopy[userGroup]; !ok {
 			groupsCopy[userGroup] = "用户分组"
 		}
 	}
-
-	allowed := NormalizeAllowedModelGroups(userSetting.AllowedModelGroups)
-	if len(allowed) == 0 {
-		return filterValidUserGroups(groupsCopy, validGroups)
-	}
-
-	result := make(map[string]string, len(globalGroups)+len(allowed))
-	for group, desc := range globalGroups {
-		if _, ok := validGroups[group]; ok {
-			result[group] = desc
-		}
-	}
-	for _, group := range allowed {
-		if _, ok := validGroups[group]; ok {
-			result[group] = setting.GetUsableGroupDescription(group)
-		}
-	}
-	if _, ok := groupsCopy["auto"]; ok && autoGroupAllowed(result) {
-		result["auto"] = groupsCopy["auto"]
-	}
-	return result
-}
-
-// GetUserAssignedModelGroupsWithSetting returns only the real model groups explicitly assigned by an administrator.
-// Unlike GetUserUsableGroupsWithSetting, it intentionally excludes globally user-selectable groups.
-func GetUserAssignedModelGroupsWithSetting(userSetting dto.UserSetting) map[string]string {
-	allowed := NormalizeAllowedModelGroups(userSetting.AllowedModelGroups)
-	if len(allowed) == 0 {
-		return map[string]string{}
-	}
-	validGroups := ratio_setting.GetGroupRatioCopy()
-	result := make(map[string]string, len(allowed))
-	for _, group := range allowed {
-		if _, ok := validGroups[group]; ok {
-			result[group] = setting.GetUsableGroupDescription(group)
-		}
-	}
-	return result
-}
-
-func filterValidUserGroups(groups map[string]string, validGroups map[string]float64) map[string]string {
-	result := make(map[string]string, len(groups))
-	for group, desc := range groups {
-		if group == "auto" {
-			result[group] = desc
-			continue
-		}
-		if _, ok := validGroups[group]; ok {
-			result[group] = desc
-		}
-	}
-	return result
-}
-
-func autoGroupAllowed(groups map[string]string) bool {
-	for _, autoGroup := range setting.GetAutoGroups() {
-		if _, ok := groups[autoGroup]; ok {
-			return true
-		}
-	}
-	return false
+	return groupsCopy
 }
 
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
@@ -111,57 +45,89 @@ func GroupInUserUsableGroups(userGroup, groupName string) bool {
 	return ok
 }
 
-func GroupInUserUsableGroupsWithSetting(userGroup, groupName string, userSetting dto.UserSetting) bool {
-	_, ok := GetUserUsableGroupsWithSetting(userGroup, userSetting)[groupName]
-	return ok
+func IsUserSelectableGroup(userGroup, groupName string) bool {
+	if groupName == "" || groupName == "auto" {
+		return false
+	}
+	return GroupInUserUsableGroups(userGroup, groupName) && ratio_setting.ContainsGroupRatio(groupName)
 }
 
+// GetUserAutoGroup 根据用户分组获取自动分组设置
 func GetUserAutoGroup(userGroup string) []string {
-	return GetUserAutoGroupWithSetting(userGroup, dto.UserSetting{})
-}
-
-func GetUserAutoGroupWithSetting(userGroup string, userSetting dto.UserSetting) []string {
-	groups := GetUserUsableGroupsWithSetting(userGroup, userSetting)
 	autoGroups := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, group := range setting.GetAutoGroups() {
-		if _, ok := groups[group]; ok {
-			autoGroups = append(autoGroups, group)
-		}
-	}
-	return autoGroups
-}
-
-func NormalizeAllowedModelGroups(groups []string) []string {
-	if len(groups) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(groups))
-	seen := make(map[string]struct{}, len(groups))
-	for _, group := range groups {
-		group = strings.TrimSpace(group)
-		if group == "" {
+		if !IsUserSelectableGroup(userGroup, group) {
 			continue
 		}
 		if _, ok := seen[group]; ok {
 			continue
 		}
 		seen[group] = struct{}{}
-		result = append(result, group)
+		autoGroups = append(autoGroups, group)
 	}
-	return result
+	return autoGroups
 }
 
+// FilterUserTokenAutoGroups applies current permissions before the current
+// per-token limit. It intentionally does not fall back to the global Auto list.
+func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
+	maxCount := setting.GetMaxTokenAutoGroups()
+	filtered := make([]string, 0, min(len(groups), maxCount))
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		if !IsUserSelectableGroup(userGroup, group) {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		filtered = append(filtered, group)
+		if len(filtered) == maxCount {
+			break
+		}
+	}
+	return filtered
+}
+
+// GetRequestAutoGroups resolves the ordered Auto groups for the current token.
+// The absence of the context value means that the token inherits the complete
+// global Auto list; a present (even empty) value is an explicit token snapshot.
+func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
+	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
+	if !ok {
+		return GetUserAutoGroup(userGroup)
+	}
+	groups, ok := value.([]string)
+	if !ok {
+		return []string{}
+	}
+	return FilterUserTokenAutoGroups(userGroup, groups)
+}
+
+// GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
+func GetGroupsEnabledModels(groups []string) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, group := range groups {
+		for _, modelName := range model.GetGroupEnabledModels(group) {
+			if _, ok := seen[modelName]; !ok {
+				seen[modelName] = struct{}{}
+				models = append(models, modelName)
+			}
+		}
+	}
+	return models
+}
+
+// GetUserGroupRatio 获取用户使用某个分组的倍率
+// userGroup 用户分组
+// group 需要获取倍率的分组
 func GetUserGroupRatio(userGroup, group string) float64 {
 	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
 	if ok {
 		return ratio
 	}
 	return ratio_setting.GetGroupRatio(group)
-}
-
-func GetUserGroupRatioWithSetting(userGroup, group string, userSetting dto.UserSetting) float64 {
-	if overrideRatio, ok := UserGroupRatioOverride(userSetting, group); ok {
-		return overrideRatio
-	}
-	return GetUserGroupRatio(userGroup, group)
 }
