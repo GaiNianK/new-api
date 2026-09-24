@@ -27,5 +27,5 @@ func NewOutboundJSONBody(data []byte) (body io.Reader, size int64, closer io.Clo
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	return common.ReaderOnly(storage), storage.Size(), storage, nil
+	return struct{ io.Reader }{Reader: storage}, storage.Size(), storage, nil
 }
