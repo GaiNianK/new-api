@@ -249,6 +249,18 @@ func UpdateUserGroupCache(userId int, group string) error {
 	return updateUserGroupCache(userId, group)
 }
 
+func updateUserStatusCache(userId int, status bool) error {
+	statusValue := common.UserStatusEnabled
+	if !status {
+		statusValue = common.UserStatusDisabled
+	}
+	return updateUserCacheField(userId, "Status", statusValue)
+}
+
+func updateUserGroupCache(userId int, group string) error {
+	return updateUserCacheField(userId, "Group", group)
+}
+
 func updateUserEmailCache(userId int, email string) error {
 	return updateUserCacheField(userId, "Email", email)
 }
