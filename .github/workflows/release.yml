@@ -47,8 +47,9 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile --linker isolated
+          node scripts/prepare-classic-build.mjs
           cd classic
+          bun install --no-save
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
       - name: Set up Go
@@ -111,8 +112,9 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile --linker isolated
+          node scripts/prepare-classic-build.mjs
           cd classic
+          bun install --no-save
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
       - name: Set up Go
@@ -172,8 +174,9 @@ jobs:
           CI: ""
         run: |
           cd web
-          bun install --filter ./classic --frozen-lockfile --linker isolated
+          node scripts/prepare-classic-build.mjs
           cd classic
+          bun install --no-save
           VITE_REACT_APP_VERSION=$VERSION bun run build
           cd ../..
       - name: Set up Go
