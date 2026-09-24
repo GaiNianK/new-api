@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,12 +15,15 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -392,6 +398,14 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		return normalizeModelNames(models), nil
 	}
 
+	if constant.IsAdvancedCustomChannel(channel.Type) {
+		return fetchAdvancedCustomUpstreamModelIDs(channel, baseURL)
+	}
+
+	if channel.Type == constant.ChannelTypeCodex {
+		return service.FetchCodexChannelModels(channel)
+	}
+
 	var url string
 	switch channel.Type {
 	case constant.ChannelTypeAli:
@@ -429,10 +443,10 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 
 	headers, err := buildFetchModelsHeaders(channel, key)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeFetchModelsError(err, key)
 	}
 
-	body, err := GetResponseBody(http.MethodGet, url, channel, headers)
+	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers)
 	if err != nil {
 		return nil, sanitizeAdvancedCustomRequestError(err, key, url)
 	}
@@ -441,15 +455,48 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	if err := common.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-
 	ids := lo.Map(result.Data, func(item OpenAIModel, _ int) string {
 		if channel.Type == constant.ChannelTypeGemini {
 			return strings.TrimPrefix(item.ID, "models/")
 		}
 		return item.ID
 	})
-
 	return normalizeModelNames(ids), nil
+}
+
+func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string) ([]string, error) {
+	key, _, apiErr := channel.GetNextEnabledKey()
+	if apiErr != nil {
+		return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
+	}
+	key = strings.TrimSpace(key)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:    types.RelayFormatOpenAI,
+		RelayMode:      relayconstant.RelayModeUnknown,
+		RequestURLPath: dto.AdvancedCustomModelListPath,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:          channel.Type,
+			ChannelBaseUrl:       baseURL,
+			ApiKey:               key,
+			ChannelOtherSettings: channel.GetOtherSettings(),
+		},
+	}
+
+	adaptor := &advancedcustom.Adaptor{}
+	url, headers, err := adaptor.BuildModelListRequest(info)
+	if err != nil {
+		return nil, sanitizeFetchModelsError(err, key)
+	}
+	if err := applyFetchModelsHeaderOverrides(channel, key, headers); err != nil {
+		return nil, sanitizeFetchModelsError(err, key)
+	}
+
+	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers)
+	if err != nil {
+		return nil, sanitizeFetchModelsError(err, key)
+	}
+	return parseOpenAIModelIDs(body)
 }
 
 func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
@@ -523,7 +570,6 @@ func refreshChannelRuntimeCache() {
 			model.InitChannelCache()
 		}()
 	}
-	service.ResetProxyClientCache()
 }
 
 func shouldSendUpstreamModelUpdateNotification(now int64, changedChannels int, failedChannels int) bool {
