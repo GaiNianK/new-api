@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	claudemessages "github.com/QuantumNous/new-api/service/relayconvert/internal/claude_messages"
 	geminichat "github.com/QuantumNous/new-api/service/relayconvert/internal/gemini_chat"
 	oaichat "github.com/QuantumNous/new-api/service/relayconvert/internal/oai_chat"
@@ -313,7 +314,7 @@ func executeRequestStep(c *gin.Context, info *relaycommon.RelayInfo, spec Reques
 		return nil, RequestStep{}, err
 	}
 	if info != nil {
-		info.AppendRequestConversion(spec.To)
+		info.AppendRequestConversion(relaytypes.RelayFormat(spec.To))
 	}
 	return value, RequestStep{
 		Converter: spec.ID,
@@ -383,7 +384,7 @@ func inferRequestRelayFormat(request any) (types.RelayFormat, error) {
 	if !ok {
 		return "", fmt.Errorf("unsupported request type %T", request)
 	}
-	return format, nil
+	return types.RelayFormat(format), nil
 }
 
 func isNilRequest(request any) bool {

@@ -219,7 +219,30 @@ func RefreshUserGroupCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+	if userId <= 0 {
+		return fmt.Errorf("invalid user id")
+	}
+	var authoritative User
+	if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&authoritative).Error; err != nil {
+		return err
+	}
+	for range 3 {
+		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+			return err
+		}
+		var verified User
+		if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&verified).Error; err != nil {
+			return err
+		}
+		if verified.AuthVersion == authoritative.AuthVersion && verified.Group == authoritative.Group {
+			return nil
+		}
+		authoritative = verified
+	}
+	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+		return err
+	}
+	return fmt.Errorf("user group changed repeatedly during cache refresh")
 }
 
 func UpdateUserGroupCache(userId int, group string) error {
@@ -245,21 +268,14 @@ func updateUserCacheField(userId int, field string, value any) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Email", email)
-}
-
-func updateUserNameCache(userId int, username string) error {
-	if !common.RedisEnabled {
-		return nil
+	var user User
+	if err := DB.Select("id", "auth_version").Where("id = ?", userId).First(&user).Error; err != nil {
+		return err
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Username", username)
-}
-
-func updateUserSettingCache(userId int, setting string) error {
-	if !common.RedisEnabled {
-		return nil
+	if user.AuthVersion <= 0 {
+		return fmt.Errorf("invalid user auth version")
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Setting", setting)
+	return updateUserCacheFieldAtVersion(userId, field, value, user.AuthVersion)
 }
 
 // GetUserLanguage returns the user's language preference from cache
