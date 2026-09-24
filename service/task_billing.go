@@ -261,13 +261,13 @@ func taskModelName(task *model.Task) string {
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
-		return
+		return true
 	}
 
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
-		return
+		return false
 	}
 
 	// 2. 退还令牌额度
@@ -387,11 +387,6 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 获取模型价格和倍率
 	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	billingContext := task.PrivateData.BillingContext
-	if billingContext != nil && billingContext.ModelRatio > 0 {
-		modelRatio = billingContext.ModelRatio
-		hasRatioSetting = true
-	}
 	// 只有配置了倍率(非固定价格)时才按 token 重新计费
 	if !hasRatioSetting || modelRatio <= 0 {
 		return false
@@ -413,28 +408,10 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
 
 	var finalGroupRatio float64
-	if billingContext != nil {
-		finalGroupRatio = billingContext.GroupRatio
+	if hasUserGroupRatio {
+		finalGroupRatio = userGroupRatio
 	} else {
-		group := task.Group
-		if group == "" {
-			user, err := model.GetUserById(task.UserId, false)
-			if err == nil {
-				group = user.Group
-			}
-		}
-		if group == "" {
-			return
-		}
-
-		groupRatio := ratio_setting.GetGroupRatio(group)
-		userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-		if hasUserGroupRatio {
-			finalGroupRatio = userGroupRatio
-		} else {
-			finalGroupRatio = groupRatio
-		}
+		finalGroupRatio = groupRatio
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
