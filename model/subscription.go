@@ -431,7 +431,7 @@ func getUserGroupByIdTx(tx *gorm.DB, userId int) (string, error) {
 		tx = DB
 	}
 	var group string
-	if err := tx.Model(&User{}).Where("id = ?", userId).Select(commonGroupCol).Find(&group).Error; err != nil {
+	if err := lockForUpdate(tx).Model(&User{}).Where("id = ?", userId).Select(commonGroupCol).Find(&group).Error; err != nil {
 		return "", err
 	}
 	return group, nil
@@ -796,7 +796,8 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			}
 		}
 
-		if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, PaymentMethodBalance); err != nil {
+		subscription, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, PaymentMethodBalance)
+		if err != nil {
 			return err
 		}
 
@@ -821,7 +822,9 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		logPlanTitle = plan.Title
 		logMoney = plan.PriceAmount
 		chargedQuota = requiredQuota
-		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
+		if subscription.PrevUserGroup != "" {
+			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
+		}
 		return nil
 	})
 	if err != nil {
@@ -834,7 +837,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		}
 	}
 	if upgradeGroup != "" {
-		_ = UpdateUserGroupCache(userId, upgradeGroup)
+		refreshSubscriptionUserGroupCache(userId, "subscription balance purchase")
 	}
 	msg := fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, logMoney, chargedQuota)
 	RecordLog(userId, LogTypeTopup, msg)
@@ -957,7 +960,7 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 		return "", err
 	}
 	if cacheGroup != "" && userId > 0 {
-		_ = UpdateUserGroupCache(userId, cacheGroup)
+		refreshSubscriptionUserGroupCache(userId, "admin subscription update")
 	}
 	if downgradeGroup != "" {
 		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
@@ -998,7 +1001,7 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		return "", err
 	}
 	if cacheGroup != "" && userId > 0 {
-		_ = UpdateUserGroupCache(userId, cacheGroup)
+		refreshSubscriptionUserGroupCache(userId, "admin subscription deletion")
 	}
 	if downgradeGroup != "" {
 		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
@@ -1225,7 +1228,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 			return expiredCount, err
 		}
 		if cacheGroup != "" {
-			_ = UpdateUserGroupCache(userId, cacheGroup)
+			refreshSubscriptionUserGroupCache(userId, "subscription expiration")
 		}
 	}
 	return expiredCount, nil
