@@ -4,7 +4,6 @@ import (
 	"maps"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -23,46 +22,17 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	filtered := make([]model.Pricing, 0, len(pricing))
 	for _, item := range pricing {
 		if common.StringsContains(item.EnableGroup, "all") {
-			item.EnableGroup = pricingVisibleGroups(item.EnableGroup, usableGroup)
 			filtered = append(filtered, item)
 			continue
 		}
 		for _, group := range item.EnableGroup {
 			if _, ok := usableGroup[group]; ok {
-				item.EnableGroup = pricingVisibleGroups(item.EnableGroup, usableGroup)
 				filtered = append(filtered, item)
 				break
 			}
 		}
 	}
 	return filtered
-}
-
-func pricingVisibleGroups(modelGroups []string, usableGroup map[string]string) []string {
-	visible := make([]string, 0, len(modelGroups))
-	if common.StringsContains(modelGroups, "all") {
-		for group := range ratio_setting.GetGroupRatioCopy() {
-			if _, ok := usableGroup[group]; ok {
-				visible = append(visible, group)
-			}
-		}
-		return visible
-	}
-
-	for _, group := range modelGroups {
-		if _, ok := usableGroup[group]; ok {
-			visible = append(visible, group)
-		}
-	}
-	return visible
-}
-
-func buildUserGroupRatios(userGroup string, userSetting dto.UserSetting) map[string]float64 {
-	ratioMap := make(map[string]float64, len(ratio_setting.GetGroupRatioCopy()))
-	for groupName := range ratio_setting.GetGroupRatioCopy() {
-		ratioMap[groupName] = service.GetUserGroupRatioWithSetting(userGroup, groupName, userSetting)
-	}
-	return ratioMap
 }
 
 func GetPricing(c *gin.Context) {
@@ -72,18 +42,22 @@ func GetPricing(c *gin.Context) {
 	groupRatio := map[string]float64{}
 	maps.Copy(groupRatio, ratio_setting.GetGroupRatioCopy())
 	var group string
-
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
-			userSetting = user.GetSetting()
-			groupRatio = buildUserGroupRatios(group, userSetting)
+			for g := range groupRatio {
+				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
+				if ok {
+					groupRatio[g] = ratio
+				}
+			}
 		}
 	}
 
-	usableGroup = service.GetUserUsableGroupsWithSetting(group, userSetting)
+	usableGroup = service.GetUserUsableGroups(group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
+	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)
@@ -97,7 +71,7 @@ func GetPricing(c *gin.Context) {
 		"group_ratio":        groupRatio,
 		"usable_group":       usableGroup,
 		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetUserAutoGroupWithSetting(group, userSetting),
+		"auto_groups":        service.GetUserAutoGroup(group),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }
