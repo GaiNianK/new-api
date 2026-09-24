@@ -13,12 +13,12 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	roottypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -32,24 +32,15 @@ type ThinkingContentInfo struct {
 }
 
 const (
-	LastMessageTypeNone     = "none"
-	LastMessageTypeText     = "text"
-	LastMessageTypeTools    = "tools"
-	LastMessageTypeThinking = "thinking"
+	LastMessageTypeNone     = convmeta.LastMessageTypeNone
+	LastMessageTypeText     = convmeta.LastMessageTypeText
+	LastMessageTypeTools    = convmeta.LastMessageTypeTools
+	LastMessageTypeThinking = convmeta.LastMessageTypeThinking
 )
 
 const TaskBillingResolutionKey = "task_billing_resolution"
 
-type ClaudeConvertInfo struct {
-	LastMessagesType string
-	Index            int
-	Usage            *dto.Usage
-	FinishReason     string
-	Done             bool
-
-	ToolCallBaseIndex      int
-	ToolCallMaxIndexOffset int
-}
+type ClaudeConvertInfo = convmeta.ClaudeConvertInfo
 
 type RerankerInfo struct {
 	Documents       []any
@@ -129,11 +120,11 @@ type RelayInfo struct {
 	ReasoningEffort    string
 	// ReasoningConversion is the suffix-derived reasoning intent attached
 	// after model mapping. Converters read it via ReasoningState().
-	ReasoningConversion *dto.ReasoningConversionState
+	ReasoningConversion *relaydto.ReasoningConversionState
 	UserSetting         dto.UserSetting
 	UserEmail           string
 	UserQuota           int
-	RelayFormat         types.RelayFormat
+	RelayFormat         relaytypes.RelayFormat
 	SendResponseCount   int
 	// ClaudeToChatStreamState / ChatToGeminiStreamState hold per-attempt
 	// stream converters. InitChannelMeta nils them so a retry cannot resume a
@@ -169,7 +160,7 @@ type RelayInfo struct {
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int
-	LastError                             *types.NewAPIError
+	LastError                             *roottypes.NewAPIError
 	RuntimeHeadersOverride                map[string]any
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
@@ -181,7 +172,7 @@ type RelayInfo struct {
 	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
 	UpstreamRequestBodySize int64
 
-	PriceData types.PriceData
+	PriceData roottypes.PriceData
 
 	// QuotaClamp is set (non-nil) when a quota conversion saturated at the
 	// supported single-request bound (or NaN fallback) while computing this request's charge.
@@ -202,17 +193,17 @@ type RelayInfo struct {
 
 	// RequestConversionChain records request format conversions in order, e.g.
 	// ["openai", "openai_responses"] or ["openai", "claude"].
-	RequestConversionChain []types.RelayFormat
+	RequestConversionChain []relaytypes.RelayFormat
 	// 最终请求到上游的格式。可由 adaptor 显式设置；
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
-	FinalRequestRelayFormat types.RelayFormat
+	FinalRequestRelayFormat relaytypes.RelayFormat
 
 	StreamStatus *StreamStatus
 
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
 
-	conversionDiagnostics          []types.ConversionDiagnostic
+	conversionDiagnostics          []relaytypes.ConversionDiagnostic
 	conversionDiagnosticKeys       map[conversionDiagnosticKey]struct{}
 	conversionDiagnosticsTruncated bool
 
@@ -428,7 +419,7 @@ var streamSupportedChannels = map[int]bool{
 
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
 	info := genBaseRelayInfo(c, nil)
-	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RelayFormat = relaytypes.RelayFormatOpenAIRealtime
 	info.ClientWs = ws
 	info.InputAudioFormat = "pcm16"
 	info.OutputAudioFormat = "pcm16"
@@ -438,7 +429,7 @@ func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
 
 func GenRelayInfoClaude(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatClaude
+	info.RelayFormat = relaytypes.RelayFormatClaude
 	info.ShouldIncludeUsage = false
 	info.ClaudeConvertInfo = &ClaudeConvertInfo{
 		LastMessagesType: LastMessageTypeNone,
@@ -450,7 +441,7 @@ func GenRelayInfoClaude(c *gin.Context, request dto.Request) *RelayInfo {
 func GenRelayInfoRerank(c *gin.Context, request *dto.RerankRequest) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayMode = relayconstant.RelayModeRerank
-	info.RelayFormat = types.RelayFormatRerank
+	info.RelayFormat = relaytypes.RelayFormatRerank
 	info.RerankerInfo = &RerankerInfo{
 		Documents:       request.Documents,
 		ReturnDocuments: request.GetReturnDocuments(),
@@ -460,20 +451,20 @@ func GenRelayInfoRerank(c *gin.Context, request *dto.RerankRequest) *RelayInfo {
 
 func GenRelayInfoOpenAIAudio(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatOpenAIAudio
+	info.RelayFormat = relaytypes.RelayFormatOpenAIAudio
 	return info
 }
 
 func GenRelayInfoEmbedding(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatEmbedding
+	info.RelayFormat = relaytypes.RelayFormatEmbedding
 	return info
 }
 
 func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayMode = relayconstant.RelayModeResponses
-	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.RelayFormat = relaytypes.RelayFormatOpenAIResponses
 
 	info.ResponsesUsageInfo = &ResponsesUsageInfo{
 		BuiltInTools: make(map[string]*BuildInToolInfo),
@@ -500,7 +491,7 @@ func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) 
 
 func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatGemini
+	info.RelayFormat = relaytypes.RelayFormatGemini
 	info.ShouldIncludeUsage = false
 
 	return info
@@ -508,13 +499,13 @@ func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 
 func GenRelayInfoImage(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatOpenAIImage
+	info.RelayFormat = relaytypes.RelayFormatOpenAIImage
 	return info
 }
 
 func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
-	info.RelayFormat = types.RelayFormatOpenAI
+	info.RelayFormat = relaytypes.RelayFormatOpenAI
 	return info
 }
 
@@ -659,50 +650,50 @@ func cloneRequestHeaders(c *gin.Context) map[string]string {
 	return headers
 }
 
-func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Request, ws *websocket.Conn) (*RelayInfo, error) {
+func GenRelayInfo(c *gin.Context, relayFormat relaytypes.RelayFormat, request dto.Request, ws *websocket.Conn) (*RelayInfo, error) {
 	var info *RelayInfo
 	var err error
 	switch relayFormat {
-	case types.RelayFormatOpenAI:
+	case relaytypes.RelayFormatOpenAI:
 		info = GenRelayInfoOpenAI(c, request)
-	case types.RelayFormatOpenAIAudio:
+	case relaytypes.RelayFormatOpenAIAudio:
 		info = GenRelayInfoOpenAIAudio(c, request)
-	case types.RelayFormatOpenAIImage:
+	case relaytypes.RelayFormatOpenAIImage:
 		info = GenRelayInfoImage(c, request)
-	case types.RelayFormatOpenAIRealtime:
+	case relaytypes.RelayFormatOpenAIRealtime:
 		info = GenRelayInfoWs(c, ws)
-	case types.RelayFormatClaude:
+	case relaytypes.RelayFormatClaude:
 		info = GenRelayInfoClaude(c, request)
-	case types.RelayFormatRerank:
+	case relaytypes.RelayFormatRerank:
 		if request, ok := request.(*dto.RerankRequest); ok {
 			info = GenRelayInfoRerank(c, request)
 			break
 		}
 		err = errors.New("request is not a RerankRequest")
-	case types.RelayFormatGemini:
+	case relaytypes.RelayFormatGemini:
 		info = GenRelayInfoGemini(c, request)
-	case types.RelayFormatEmbedding:
+	case relaytypes.RelayFormatEmbedding:
 		info = GenRelayInfoEmbedding(c, request)
-	case types.RelayFormatOpenAIResponses:
+	case relaytypes.RelayFormatOpenAIResponses:
 		if request, ok := request.(*dto.OpenAIResponsesRequest); ok {
 			info = GenRelayInfoResponses(c, request)
 			break
 		}
 		err = errors.New("request is not a OpenAIResponsesRequest")
-	case types.RelayFormatOpenAIResponsesCompaction:
+	case relaytypes.RelayFormatOpenAIResponsesCompaction:
 		if request, ok := request.(*dto.OpenAIResponsesCompactionRequest); ok {
 			return GenRelayInfoResponsesCompaction(c, request), nil
 		}
 		return nil, errors.New("request is not a OpenAIResponsesCompactionRequest")
-	case types.RelayFormatOpenAIAlphaSearch:
+	case relaytypes.RelayFormatOpenAIAlphaSearch:
 		if request, ok := request.(*dto.AlphaSearchRequest); ok {
 			return GenRelayInfoAlphaSearch(c, request), nil
 		}
 		return nil, errors.New("request is not a AlphaSearchRequest")
-	case types.RelayFormatTask:
+	case relaytypes.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}
-	case types.RelayFormatMjProxy:
+	case relaytypes.RelayFormatMjProxy:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}
 	default:
@@ -730,10 +721,10 @@ func (info *RelayInfo) InitRequestConversionChain() {
 	if info.RelayFormat == "" {
 		return
 	}
-	info.RequestConversionChain = []types.RelayFormat{info.RelayFormat}
+	info.RequestConversionChain = []relaytypes.RelayFormat{info.RelayFormat}
 }
 
-func (info *RelayInfo) AppendRequestConversion(format types.RelayFormat) {
+func (info *RelayInfo) AppendRequestConversion(format relaytypes.RelayFormat) {
 	if info == nil {
 		return
 	}
@@ -741,7 +732,7 @@ func (info *RelayInfo) AppendRequestConversion(format types.RelayFormat) {
 		return
 	}
 	if len(info.RequestConversionChain) == 0 {
-		info.RequestConversionChain = []types.RelayFormat{format}
+		info.RequestConversionChain = []relaytypes.RelayFormat{format}
 		return
 	}
 	last := info.RequestConversionChain[len(info.RequestConversionChain)-1]
@@ -751,7 +742,7 @@ func (info *RelayInfo) AppendRequestConversion(format types.RelayFormat) {
 	info.RequestConversionChain = append(info.RequestConversionChain, format)
 }
 
-func (info *RelayInfo) GetFinalRequestRelayFormat() types.RelayFormat {
+func (info *RelayInfo) GetFinalRequestRelayFormat() relaytypes.RelayFormat {
 	if info == nil {
 		return ""
 	}
@@ -769,7 +760,7 @@ func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponse
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = relayconstant.RelayModeResponsesCompact
 	}
-	info.RelayFormat = types.RelayFormatOpenAIResponsesCompaction
+	info.RelayFormat = relaytypes.RelayFormatOpenAIResponsesCompaction
 	return info
 }
 
@@ -778,7 +769,7 @@ func GenRelayInfoAlphaSearch(c *gin.Context, request *dto.AlphaSearchRequest) *R
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = relayconstant.RelayModeAlphaSearch
 	}
-	info.RelayFormat = types.RelayFormatOpenAIAlphaSearch
+	info.RelayFormat = relaytypes.RelayFormatOpenAIAlphaSearch
 	info.ResponsesUsageInfo = &ResponsesUsageInfo{
 		BuiltInTools: map[string]*BuildInToolInfo{
 			dto.BuildInToolWebSearchPreview: {
@@ -869,7 +860,7 @@ func (info *RelayInfo) SetReasoningEffort(effort string) {
 	info.ReasoningEffort = strings.TrimSpace(effort)
 }
 
-func (info *RelayInfo) ReasoningState() *dto.ReasoningConversionState {
+func (info *RelayInfo) ReasoningState() *relaydto.ReasoningConversionState {
 	if info == nil {
 		return nil
 	}
@@ -932,7 +923,7 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 	}
 	if info != nil {
 		if info.ChannelMeta != nil {
-			options.ToolLossPolicy = types.ConversionLossPolicy(info.ChannelOtherSettings.ToolLossPolicy)
+			options.ToolLossPolicy = relaytypes.ConversionLossPolicy(info.ChannelOtherSettings.ToolLossPolicy)
 		}
 		info.convOptions = options
 	}
