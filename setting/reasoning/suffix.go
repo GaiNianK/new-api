@@ -10,7 +10,10 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
-	"github.com/samber/lo"
+var (
+	EffortSuffixes           = kitreasoning.EffortSuffixes
+	OpenAIEffortSuffixes     = kitreasoning.OpenAIEffortSuffixes
+	DeepSeekV4EffortSuffixes = kitreasoning.DeepSeekV4EffortSuffixes
 )
 
 var (

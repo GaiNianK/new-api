@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	roottypes "github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -2216,7 +2217,7 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]any {
 			"error_code":  code,
 			"type":        errorType,
 			"error_type":  errorType,
-			"skip_retry":  types.IsSkipRetryError(info.LastError),
+			"skip_retry":  roottypes.IsSkipRetryError(info.LastError),
 		}
 		ctx["last_error"] = lastError
 		ctx["last_error_status_code"] = info.LastError.StatusCode
