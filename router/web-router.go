@@ -13,12 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ThemeAssets holds the embedded frontend assets for both themes.
-type ThemeAssets struct {
-	DefaultBuildFS   embed.FS
-	DefaultIndexPage []byte
-	ClassicBuildFS   embed.FS
-	ClassicIndexPage []byte
+// WebAssets holds the embedded dashboard frontend assets.
+type WebAssets struct {
+	BuildFS   embed.FS
+	IndexPage []byte
 }
 
 func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.HandlerFunc) {
