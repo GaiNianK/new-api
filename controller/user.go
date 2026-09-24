@@ -1,10 +1,8 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,19 +10,18 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -59,7 +56,7 @@ func Login(c *gin.Context) {
 		return
 	}
 	var loginRequest LoginRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&loginRequest)
+	err := common.DecodeJson(c.Request.Body, &loginRequest)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -201,17 +198,8 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBundle) {
 	c.Set("login_method", bundle.Session.LoginMethod)
 	model.UpdateUserLastLoginAt(user.Id)
-	session := sessions.Default(c)
-	session.Set("id", user.Id)
-	session.Set("username", user.Username)
-	session.Set("role", user.Role)
-	session.Set("status", user.Status)
-	session.Set("group", user.Group)
-	err := session.Save()
-	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
-		return
-	}
+	service.WriteRefreshCookie(c, bundle.RefreshToken)
+	setAuthNoStore(c)
 	recordLoginAudit(user, c)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
@@ -226,23 +214,6 @@ func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBu
 	})
 }
 
-func Logout(c *gin.Context) {
-	session := sessions.Default(c)
-	session.Clear()
-	err := session.Save()
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"message": "",
-		"success": true,
-	})
-}
-
 func Register(c *gin.Context) {
 	if !common.RegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
@@ -253,7 +224,7 @@ func Register(c *gin.Context) {
 		return
 	}
 	var user model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&user)
+	err := common.DecodeJson(c.Request.Body, &user)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -365,7 +336,8 @@ func Register(c *gin.Context) {
 
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.GetAllUsers(pageInfo)
+	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -394,7 +366,8 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -427,23 +400,10 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
-	userSetting := user.GetSetting()
-	user.AllowedModelGroups = userSetting.AllowedModelGroups
-	responseBytes, err := common.Marshal(user)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	response := map[string]any{}
-	if err := common.Unmarshal(responseBytes, &response); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	response["group_ratio_overrides"] = userSetting.GroupRatioOverrides
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    response,
+		"data":    user,
 	})
 	return
 }
@@ -509,12 +469,13 @@ func GetSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	// Hide admin remarks: set to empty to trigger omitempty tag, ensuring the remark field is not included in JSON returned to regular users
-	user.Remark = ""
-
-	// 计算用户权限信息
+	responseData := buildSelfUserData(user)
+	// The authenticated role is loaded from GetUserCache. It should equal the
+	// row role, but use it for capabilities so GetSelf and login/refresh remain
+	// consistent with the authorization decision made for this request.
 	permissions := calculateUserPermissions(userRole)
 	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
+	responseData["permissions"] = permissions
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -557,15 +518,8 @@ func buildSelfUserData(user *model.User) map[string]any {
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":       permissions,                // 新增权限字段
+		"permissions":       permissions,
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    responseData,
-	})
-	return
 }
 
 // 计算用户权限的辅助函数
@@ -649,7 +603,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 	// 普通用户不包含admin区域
 
 	// 转换为JSON字符串
-	configBytes, err := json.Marshal(defaultConfig)
+	configBytes, err := common.Marshal(defaultConfig)
 	if err != nil {
 		common.SysLog("生成默认边栏配置失败: " + err.Error())
 		return ""
@@ -668,57 +622,34 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	userSetting := user.GetSetting()
-	groups := service.GetUserUsableGroupsWithSetting(user.Group, userSetting)
+	groups := service.GetUserUsableGroups(user.Group)
 	group := c.Query("group")
-	if group != "" {
-		if _, ok := groups[group]; !ok {
-			c.JSON(http.StatusOK, gin.H{
-				"success": true,
-				"message": "",
-				"data":    []string{},
-			})
-			return
+	var groupsToQuery []string
+	switch {
+	case group == "":
+		for g := range groups {
+			groupsToQuery = append(groupsToQuery, g)
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "",
-			"data":    model.GetGroupEnabledModels(group),
-		})
-		return
-	}
-
-	var models []string
-	for group := range groups {
-		for _, g := range model.GetGroupEnabledModels(group) {
-			if !common.StringsContains(models, g) {
-				models = append(models, g)
-			}
+	case group == "auto":
+		if _, ok := groups[group]; ok {
+			groupsToQuery = service.GetUserAutoGroup(user.Group)
+		}
+	default:
+		if _, ok := groups[group]; ok {
+			groupsToQuery = []string{group}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    models,
+		"data":    service.GetGroupsEnabledModels(groupsToQuery),
 	})
-	return
 }
 
 func UpdateUser(c *gin.Context) {
 	var updatedUser model.User
-	bodyBytes, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-		return
-	}
-	var rawPayload map[string]json.RawMessage
-	if err := common.Unmarshal(bodyBytes, &rawPayload); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-		return
-	}
-	_, settingFieldPresent := rawPayload["setting"]
-	if err := common.Unmarshal(bodyBytes, &updatedUser); err != nil || updatedUser.Id == 0 {
+	err := common.DecodeJson(c.Request.Body, &updatedUser)
+	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -736,19 +667,6 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if updatedUser.AllowedModelGroups != nil {
-		updatedUser.AllowedModelGroups = service.NormalizeAllowedModelGroups(updatedUser.AllowedModelGroups)
-		for _, group := range updatedUser.AllowedModelGroups {
-			if !ratio_setting.ContainsGroupRatio(group) {
-				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-				return
-			}
-		}
-	}
-	if updatedUser.GetSetting().GroupRatioOverrides != nil && !service.ValidateGroupRatioOverrides(updatedUser.GetSetting().GroupRatioOverrides) {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-		return
-	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -760,23 +678,12 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	updatePassword := updatedUser.Password != ""
-	allowedModelGroups := updatedUser.AllowedModelGroups
-	allowedModelGroupsUpdated := allowedModelGroups != nil
-	updatedSetting := updatedUser.GetSetting()
-	groupRatioOverridesUpdated := settingFieldPresent
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
 		}
-		if allowedModelGroupsUpdated || groupRatioOverridesUpdated {
-			userSetting := mergeManagedUserSettings(originUser.GetSetting(), allowedModelGroups, allowedModelGroupsUpdated, updatedSetting, groupRatioOverridesUpdated)
-			updatedUser.SetSetting(userSetting)
-			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).Update("setting", updatedUser.Setting).Error; err != nil {
-				return err
-			}
-		}
-		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, updatedUser.Role, updatedUser.AdminPermissions)
+		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
 		return err
 	}); err != nil {
@@ -789,8 +696,15 @@ func UpdateUser(c *gin.Context) {
 			return
 		}
 	}
-	if err := model.InvalidateUserCache(updatedUser.Id); err != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", updatedUser.Id, err.Error()))
+	if updatedUser.AuthVersion > originUser.AuthVersion {
+		if _, err := model.RevokeAllUserSessions(updatedUser.Id, "admin_user_update"); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	if err := model.PublishUserAuthCache(updatedUser.Id); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	recordManageAuditFor(c, updatedUser.Id, "user.update", map[string]any{
 		"username": originUser.Username,
@@ -801,17 +715,6 @@ func UpdateUser(c *gin.Context) {
 		"message": "",
 	})
 	return
-}
-
-func mergeManagedUserSettings(origin dto.UserSetting, allowedModelGroups []string, allowedModelGroupsUpdated bool, updated dto.UserSetting, groupRatioOverridesUpdated bool) dto.UserSetting {
-	userSetting := origin
-	if allowedModelGroupsUpdated {
-		userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(allowedModelGroups)
-	}
-	if groupRatioOverridesUpdated {
-		userSetting.GroupRatioOverrides = service.NormalizeGroupRatioOverrides(updated.GroupRatioOverrides)
-	}
-	return userSetting
 }
 
 func AdminClearUserBinding(c *gin.Context) {
@@ -1002,10 +905,7 @@ func UpdateSelf(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 	return
 }
 
@@ -1070,7 +970,7 @@ func DeleteSelf(c *gin.Context) {
 
 func CreateUser(c *gin.Context) {
 	var user model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&user)
+	err := common.DecodeJson(c.Request.Body, &user)
 	user.Username = strings.TrimSpace(user.Username)
 	if err != nil || user.Username == "" || user.Password == "" {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -1078,19 +978,6 @@ func CreateUser(c *gin.Context) {
 	}
 	if err := common.Validate.Struct(&user); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
-		return
-	}
-	if user.AllowedModelGroups != nil {
-		user.AllowedModelGroups = service.NormalizeAllowedModelGroups(user.AllowedModelGroups)
-		for _, group := range user.AllowedModelGroups {
-			if !ratio_setting.ContainsGroupRatio(group) {
-				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-				return
-			}
-		}
-	}
-	if user.GetSetting().GroupRatioOverrides != nil && !service.ValidateGroupRatioOverrides(user.GetSetting().GroupRatioOverrides) {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if user.DisplayName == "" {
@@ -1112,22 +999,6 @@ func CreateUser(c *gin.Context) {
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
-		}
-		userSetting := cleanUser.GetSetting()
-		userSettingTouched := false
-		if user.AllowedModelGroups != nil {
-			userSetting.AllowedModelGroups = service.NormalizeAllowedModelGroups(user.AllowedModelGroups)
-			userSettingTouched = true
-		}
-		if user.GetSetting().GroupRatioOverrides != nil {
-			userSetting.GroupRatioOverrides = service.NormalizeGroupRatioOverrides(user.GetSetting().GroupRatioOverrides)
-			userSettingTouched = true
-		}
-		if userSettingTouched {
-			cleanUser.SetSetting(userSetting)
-			if err := tx.Model(&model.User{}).Where("id = ?", cleanUser.Id).Update("setting", cleanUser.Setting).Error; err != nil {
-				return err
-			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
@@ -1165,7 +1036,10 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 	if c.GetInt("role") != common.RoleRootUser {
 		return false, fmt.Errorf("only root can update admin permissions")
 	}
-	return true, authz.SetUserPermissionsForRoleInTx(tx, userID, userRole, permissions)
+	if userRole < common.RoleAdminUser {
+		return true, authz.ClearUserAuthorizationInTx(tx, userID)
+	}
+	return true, authz.SetUserPermissionsInTx(tx, userID, permissions)
 }
 
 type ManageRequest struct {
@@ -1178,7 +1052,7 @@ type ManageRequest struct {
 // ManageUser Only admin user can do this
 func ManageUser(c *gin.Context) {
 	var req ManageRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&req)
+	err := common.DecodeJson(c.Request.Body, &req)
 
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -1263,23 +1137,27 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 
-	authzTouched := false
 	if req.Action == "demote" {
 		if err := model.DB.Transaction(func(tx *gorm.DB) error {
 			if err := user.UpdateWithTx(tx, false); err != nil {
 				return err
 			}
-			authzTouched = true
 			return authz.ClearUserAuthorizationInTx(tx, user.Id)
 		}); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		if authzTouched {
-			if err := authz.ReloadPolicy(); err != nil {
-				common.ApiError(c, err)
-				return
-			}
+		if err := authz.ReloadPolicy(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.PublishUserAuthCache(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if _, err := model.RevokeAllUserSessions(user.Id, "admin_demote"); err != nil {
+			common.ApiError(c, err)
+			return
 		}
 	} else {
 		if err := user.Update(false); err != nil {
@@ -1287,17 +1165,12 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 	}
-	// 禁用 / 角色调整后，强制失效用户缓存与其全部令牌缓存，
-	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
-	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
-	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
-	if req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
-		if err := model.InvalidateUserCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-		}
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
-		}
+	// Update/UpdateWithTx has already published the new user hash and revoked
+	// browser sessions exactly once. Only PAT/relay token caches still need an
+	// explicit invalidation; deleting the user hash here would discard the
+	// freshly published auth-version floor.
+	if err := model.InvalidateUserTokensCache(user.Id); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 	}
 	recordManageAuditFor(c, user.Id, "user.manage", map[string]any{
 		"action":   req.Action,
@@ -1509,7 +1382,6 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
-		AllowedModelGroups:               existingSettings.AllowedModelGroups,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置
