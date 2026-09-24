@@ -180,10 +180,16 @@ func replaceBackupCodesWithAuthVersion(userId int, codes []string, identity *Aut
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrTwoFANotEnabled
 			}
+			return err
 		}
-
-		return nil
-	})
+		if _, err := IncrementUserAuthVersionWithTx(tx, userId); err != nil {
+			return err
+		}
+		return replaceBackupCodesWithTx(tx, userId, codes)
+	}); err != nil {
+		return err
+	}
+	return PublishUserAuthCache(userId)
 }
 
 // ValidateBackupCode 验证并使用备用码
@@ -203,7 +209,6 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 	// 验证备用码
 	for _, bc := range backupCodes {
 		if common.ValidatePasswordAndHash(normalizedCode, bc.CodeHash) {
-			// 标记为已使用
 			now := time.Now()
 			result := DB.Model(&TwoFABackupCode{}).
 				Where("id = ? AND is_used = ?", bc.Id, false).
@@ -214,8 +219,7 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 			if result.Error != nil {
 				return false, result.Error
 			}
-
-			return true, nil
+			return result.RowsAffected == 1, nil
 		}
 	}
 
@@ -265,12 +269,7 @@ func disableTwoFAWithAuthVersion(userId int, identity *AuthSessionIdentity) erro
 	}); err != nil {
 		return err
 	}
-	if twoFA == nil {
-		return ErrTwoFANotEnabled
-	}
-
-	// 删除2FA设置和备用码
-	return twoFA.Delete()
+	return PublishUserAuthCache(userId)
 }
 
 // ValidateTOTPAndUpdateUsage 验证TOTP并更新使用记录

@@ -318,18 +318,8 @@ func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) err
 			return ErrPasskeyNotFound
 		}
 		return nil
-	})
-}
-
-func DeletePasskeyByUserID(userID int) error {
-	if userID == 0 {
-		common.SysLog("DeletePasskeyByUserID: empty user ID")
-		return fmt.Errorf("删除失败，请重试")
+	}); err != nil {
+		return err
 	}
-	// 使用Unscoped()进行硬删除，避免唯一索引冲突
-	if err := DB.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{}).Error; err != nil {
-		common.SysLog(fmt.Sprintf("DeletePasskeyByUserID: failed to delete passkey for user %d: %v", userID, err))
-		return fmt.Errorf("删除失败，请重试")
-	}
-	return nil
+	return PublishUserAuthCache(userID)
 }
