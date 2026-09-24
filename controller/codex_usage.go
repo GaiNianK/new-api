@@ -10,7 +10,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/service"
@@ -74,10 +73,6 @@ func fetchCodexChannelWhamData(
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
 		return
 	}
-	if !channelVisibleToReader(c, ch) {
-		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
-		return
-	}
 	if ch.Type != constant.ChannelTypeCodex {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not Codex"})
 		return
@@ -104,7 +99,7 @@ func fetchCodexChannelWhamData(
 		return
 	}
 
-	client, err := service.NewProxyHttpClient(ch.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithProxy(ch.GetSetting().Proxy)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -138,7 +133,6 @@ func fetchCodexChannelWhamData(
 			if encErr == nil {
 				_ = model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
 				model.InitChannelCache()
-				service.ResetProxyClientCache()
 			}
 
 			ctx2, cancel2 := context.WithTimeout(c.Request.Context(), 15*time.Second)

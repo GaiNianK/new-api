@@ -134,20 +134,10 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 	c.JSON(status, gin.H{"success": false, "code": code, "message": message})
 }
 
-type VerificationStatusResponse struct {
-	Verified  bool  `json:"verified"`
-	ExpiresAt int64 `json:"expires_at,omitempty"`
-}
-
-// UniversalVerify 通用验证接口
-// 支持 2FA 和 Passkey 验证，验证成功后在 session 中记录时间戳
 func UniversalVerify(c *gin.Context) {
-	userId := c.GetInt("id")
-	if userId == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "未登录",
-		})
+	identity, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "当前认证方式不支持安全验证"})
 		return
 	}
 	var request service.VerificationInput
