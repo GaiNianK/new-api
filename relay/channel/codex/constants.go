@@ -12,12 +12,3 @@ var ModelList = []string{
 }
 
 const ChannelName = "codex"
-
-func withCompactModelSuffix(models []string) []string {
-	out := make([]string, 0, len(models)*2)
-	out = append(out, models...)
-	out = append(out, lo.Map(models, func(model string, _ int) string {
-		return ratio_setting.WithCompactModelSuffix(model)
-	})...)
-	return lo.Uniq(out)
-}

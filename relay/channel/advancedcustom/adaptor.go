@@ -9,16 +9,16 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/relayconvert"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -383,11 +383,15 @@ func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
 }
 
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
-	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(a.route.UpstreamPath), info), info)
+	return buildRouteURL(a.route, a.converter, info)
+}
+
+func buildRouteURL(route dto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
+	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(route.UpstreamPath), info), info)
 	if err != nil {
 		return "", err
 	}
-	if shouldUseGeminiStreamURL(a.converter, info) {
+	if shouldUseGeminiStreamURL(converter, info) {
 		useGeminiStreamGenerateContentURL(parsedURL)
 	}
 	if info != nil && info.RelayMode == relayconstant.RelayModeRealtime {
@@ -398,9 +402,9 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 			parsedURL.Scheme = "ws"
 		}
 	}
-	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
+	if route.Auth != nil && strings.TrimSpace(route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
 		query := parsedURL.Query()
-		query.Set(strings.TrimSpace(a.route.Auth.Name), applyAuthTemplate(a.route.Auth.Value, info.ApiKey))
+		query.Set(strings.TrimSpace(route.Auth.Name), applyAuthTemplate(route.Auth.Value, info.ApiKey))
 		parsedURL.RawQuery = query.Encode()
 	}
 	return parsedURL.String(), nil
